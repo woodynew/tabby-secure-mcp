@@ -38,6 +38,13 @@ describe('assertPackManifest', () => {
       assertPackManifest({ name: 'x', version: '0.1.0', dependencies: { foo: 'file:../x' } }, 'plugin'),
     ).toThrow(/file:/i)
   })
+
+  it('requires companion tarballs to ship without runtime dependencies', () => {
+    expect(() =>
+      assertPackManifest({ version: '0.1.0', dependencies: { zod: '4.6.7' } }, 'companion'),
+    ).toThrow(/runtime dependencies/i)
+    expect(assertPackManifest({ version: '0.1.0' }, 'companion')).toBeUndefined()
+  })
 })
 
 describe('inspectPackedTarball integration', () => {

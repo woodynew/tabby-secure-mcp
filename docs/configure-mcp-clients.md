@@ -41,7 +41,8 @@ Whitelist profiles under Tabby **Settings → Secure MCP** (authorized SSH profi
 
 ## Cursor
 
-Project file: `.cursor/mcp.json` in the repository, or user-level MCP configuration in Cursor settings (JSON).
+- **User/global config:** `~/.cursor/mcp.json` on Linux and macOS (`%USERPROFILE%\.cursor\mcp.json` on Windows).
+- **Project config:** `.cursor/mcp.json` in the repository.
 
 ```json
 {
@@ -74,10 +75,7 @@ Restart Cursor or reload MCP servers after saving.
 Add a user-scoped stdio server (replace the command with your install output):
 
 ```bash
-claude mcp add tabby-secure-mcp \
-  --transport stdio \
-  --scope user \
-  -- \
+claude mcp add --transport stdio --scope user tabby-secure-mcp -- \
   /absolute/path/to/tabby/plugins/node_modules/.bin/tabby-secure-mcp
 ```
 
@@ -97,7 +95,14 @@ Use the Windows `.cmd` path as the command argument on Windows.
 
 ## Claude Desktop
 
-Edit the Claude Desktop MCP config file (location varies by OS) and add:
+Edit the Claude Desktop MCP config file for your OS and add:
+
+| OS | Config path |
+| --- | --- |
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+Linux native Claude Desktop config paths are not documented here; use Claude Code or another supported client on Linux if Desktop is unavailable.
 
 ```json
 {

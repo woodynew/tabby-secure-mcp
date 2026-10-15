@@ -1,26 +1,34 @@
-import { spawn } from 'node:child_process'
 import { lstat, mkdir, mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises'
 import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { packWorkspacePackage, runCommand } from './npm-pack-utils.mjs'
 
 export const EXPECTED_VERSION = '0.1.0'
 export const PLUGIN_PACKAGE_NAME = 'tabby-secure-mcp'
 export const COMPANION_PACKAGE_NAME = '@tabby-secure-mcp/companion'
 
 const MAX_DESCRIPTOR_BYTES = 4096
+const MAX_LOCK_BYTES = 4096
+const MAX_LOCK_OWNER_LENGTH = 128
 const PAIRING_NONCE_BYTES = 32
 
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
+
+export function platformPathApi(platform = process.platform) {
+  return platform === 'win32' ? path.win32 : path
+}
 
 export function resolveDefaultPluginsDir(deps = {}) {
   const platform = deps.platform ?? process.platform
   const env = deps.env ?? process.env
   const getHome = deps.homedir ?? nodeHomedir
+  const pathApi = platformPathApi(platform)
 
   if (platform === 'win32') {
-    const appData = env.APPDATA ?? path.win32.join(getHome(), 'AppData', 'Roaming')
-    return path.win32.join(appData, 'tabby', 'plugins')
+    const appData = env.APPDATA ?? pathApi.join(getHome(), 'AppData', 'Roaming')
+    return pathApi.join(appData, 'tabby', 'plugins')
   }
   if (platform === 'darwin') {
     return path.join(getHome(), 'Library', 'Application Support', 'tabby', 'plugins')
@@ -36,14 +44,12 @@ export function assertSafeAbsolutePluginsDir(pluginsDir, deps = {}) {
     throw new Error('plugins directory contains an unsafe null byte')
   }
   const platform = deps.platform ?? process.platform
-  const isAbsoluteInput =
-    platform === 'win32' ? path.win32.isAbsolute(pluginsDir) : path.isAbsolute(pluginsDir)
-  if (!isAbsoluteInput) {
+  const pathApi = platformPathApi(platform)
+  if (!pathApi.isAbsolute(pluginsDir)) {
     throw new Error('plugins directory must be an absolute path')
   }
-  const resolved =
-    platform === 'win32' ? path.win32.resolve(pluginsDir) : path.resolve(pluginsDir)
-  const root = platform === 'win32' ? path.win32.parse(resolved).root : path.parse(resolved).root
+  const resolved = pathApi.resolve(pluginsDir)
+  const root = pathApi.parse(resolved).root
   if (resolved === root || resolved === root.replace(/\\$/, '')) {
     throw new Error('plugins directory path is unsafe')
   }
@@ -124,20 +130,46 @@ export function parseDescriptorBounded(raw) {
   }
 }
 
+export function parseLockBounded(raw) {
+  if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > MAX_LOCK_BYTES) {
+    return { ok: false, code: 'oversize' }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { ok: false, code: 'malformed' }
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return { ok: false, code: 'invalid' }
+  }
+  if (!Number.isInteger(parsed.pid) || parsed.pid <= 0) {
+    return { ok: false, code: 'invalid' }
+  }
+  if (typeof parsed.owner !== 'string' || parsed.owner.length === 0) {
+    return { ok: false, code: 'invalid' }
+  }
+  if (Buffer.byteLength(parsed.owner, 'utf8') > MAX_LOCK_OWNER_LENGTH) {
+    return { ok: false, code: 'invalid' }
+  }
+  return { ok: true, lock: { pid: parsed.pid, owner: parsed.owner } }
+}
+
 export function resolveRuntimePaths(deps = {}) {
   const platform = deps.platform ?? process.platform
   const env = deps.env ?? process.env
   const getHome = deps.homedir ?? nodeHomedir
   const getTmp = deps.tmpdir ?? nodeTmpdir
+  const pathApi = platformPathApi(platform)
 
   if (platform === 'win32') {
-    const localAppData = env.LOCALAPPDATA ?? path.win32.join(getHome(), 'AppData', 'Local')
-    const runtimeDirectory = path.win32.join(localAppData, 'tabby-secure-mcp')
+    const localAppData = env.LOCALAPPDATA ?? pathApi.join(getHome(), 'AppData', 'Local')
+    const runtimeDirectory = pathApi.join(localAppData, 'tabby-secure-mcp')
     return {
       runtimeDirectory,
       endpoint: `\\\\.\\pipe\\tabby-secure-mcp-placeholder`,
-      descriptorPath: path.win32.join(runtimeDirectory, 'descriptor.json'),
-      lockPath: path.win32.join(runtimeDirectory, 'companion.lock'),
+      descriptorPath: pathApi.join(runtimeDirectory, 'descriptor.json'),
+      lockPath: pathApi.join(runtimeDirectory, 'companion.lock'),
     }
   }
 
@@ -153,12 +185,169 @@ export function resolveRuntimePaths(deps = {}) {
 }
 
 function isPathInsideDirectory(candidate, directory, platform) {
-  const resolve = platform === 'win32' ? path.win32.resolve : path.resolve
-  const relative = platform === 'win32' ? path.win32.relative : path.relative
-  const resolvedCandidate = resolve(candidate)
-  const resolvedDirectory = resolve(directory)
-  const rel = relative(resolvedDirectory, resolvedCandidate)
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  const pathApi = platformPathApi(platform)
+  const resolvedCandidate = pathApi.resolve(candidate)
+  const resolvedDirectory = pathApi.resolve(directory)
+  const rel = pathApi.relative(resolvedDirectory, resolvedCandidate)
+  return rel === '' || (!rel.startsWith('..') && !pathApi.isAbsolute(rel))
+}
+
+async function readArtifactState(filePath) {
+  try {
+    const fileStat = await lstat(filePath)
+    if (fileStat.isSymbolicLink()) {
+      return { kind: 'symlink' }
+    }
+    if (fileStat.size > MAX_DESCRIPTOR_BYTES) {
+      return { kind: 'oversize' }
+    }
+    const raw = await readFile(filePath, 'utf8')
+    return { kind: 'present', raw, size: fileStat.size }
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return { kind: 'missing' }
+    }
+    throw error
+  }
+}
+
+async function readLockArtifactState(filePath) {
+  try {
+    const fileStat = await lstat(filePath)
+    if (fileStat.isSymbolicLink()) {
+      return { kind: 'symlink' }
+    }
+    if (fileStat.size > MAX_LOCK_BYTES) {
+      return { kind: 'oversize' }
+    }
+    const raw = await readFile(filePath, 'utf8')
+    return { kind: 'present', raw, size: fileStat.size }
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return { kind: 'missing' }
+    }
+    throw error
+  }
+}
+
+function lockParseState(lockArtifact) {
+  if (lockArtifact.kind === 'missing') {
+    return { shape: 'missing' }
+  }
+  if (lockArtifact.kind === 'symlink') {
+    return { shape: 'symlink' }
+  }
+  if (lockArtifact.kind === 'oversize') {
+    return { shape: 'malformed' }
+  }
+  const parsed = parseLockBounded(lockArtifact.raw)
+  if (!parsed.ok) {
+    return { shape: 'malformed' }
+  }
+  return { shape: 'valid', pid: parsed.lock.pid }
+}
+
+function descriptorParseState(descriptorArtifact) {
+  if (descriptorArtifact.kind === 'missing') {
+    return { shape: 'missing' }
+  }
+  if (descriptorArtifact.kind === 'symlink') {
+    return { shape: 'symlink' }
+  }
+  if (descriptorArtifact.kind === 'oversize') {
+    return { shape: 'malformed' }
+  }
+  const parsed = parseDescriptorBounded(descriptorArtifact.raw)
+  if (!parsed.ok) {
+    return { shape: 'malformed' }
+  }
+  return { shape: 'valid', pid: parsed.descriptor.pid }
+}
+
+export async function assessRuntimeCleanupSafety(runtimePaths, deps = {}) {
+  const platform = deps.platform ?? process.platform
+  const isProcessAlive = deps.isProcessAlive ?? defaultProcessLivenessProbe
+
+  const descriptorArtifact = await readArtifactState(runtimePaths.descriptorPath)
+  const lockArtifact = await readLockArtifactState(runtimePaths.lockPath)
+  const descriptor = descriptorParseState(descriptorArtifact)
+  const lock = lockParseState(lockArtifact)
+
+  if (descriptor.shape === 'symlink' || lock.shape === 'symlink') {
+    return {
+      status: 'blocked',
+      message:
+        'companion runtime artifacts include a symbolic link. Inspect the runtime directory manually, stop any tabby-secure-mcp companion, and retry.',
+    }
+  }
+
+  if (descriptor.shape === 'malformed') {
+    return {
+      status: 'blocked',
+      message:
+        'companion runtime descriptor is malformed or oversize. Stop any tabby-secure-mcp companion, inspect the runtime directory manually, and retry.',
+    }
+  }
+
+  if (descriptor.shape === 'missing') {
+    if (lock.shape === 'symlink' || lock.shape === 'malformed') {
+      return {
+        status: 'blocked',
+        message:
+          'companion runtime lock is malformed or unsafe while descriptor is missing. Stop any tabby-secure-mcp companion, inspect the runtime directory manually, and retry.',
+      }
+    }
+    if (lock.shape === 'valid' && isProcessAlive(lock.pid)) {
+      return {
+        status: 'blocked',
+        message: `tabby-secure-mcp companion is still running (pid ${lock.pid}). Stop the companion process and retry.`,
+        pid: lock.pid,
+      }
+    }
+  }
+
+  if (lock.shape === 'malformed') {
+    return {
+      status: 'blocked',
+      message:
+        'companion runtime lock is malformed or oversize. Stop any tabby-secure-mcp companion, inspect the runtime directory manually, and retry.',
+    }
+  }
+
+  const livePids = []
+  if (descriptor.shape === 'valid' && isProcessAlive(descriptor.pid)) {
+    livePids.push(descriptor.pid)
+  }
+  if (lock.shape === 'valid' && isProcessAlive(lock.pid)) {
+    livePids.push(lock.pid)
+  }
+  if (livePids.length > 0) {
+    const pid = livePids[0]
+    return {
+      status: 'blocked',
+      message: `tabby-secure-mcp companion is still running (pid ${pid}). Stop the companion process and retry.`,
+      pid,
+    }
+  }
+
+  if (platform !== 'win32') {
+    try {
+      const socketStat = await lstat(runtimePaths.endpoint)
+      if (socketStat.isSymbolicLink()) {
+        return {
+          status: 'blocked',
+          message:
+            'companion runtime socket is a symbolic link. Inspect the runtime directory manually, stop any tabby-secure-mcp companion, and retry.',
+        }
+      }
+    } catch (error) {
+      if (!(error && typeof error === 'object' && error.code === 'ENOENT')) {
+        throw error
+      }
+    }
+  }
+
+  return { status: 'cleanable' }
 }
 
 async function removeOwnedRegularFile(filePath, runtimeDirectory, platform) {
@@ -179,36 +368,6 @@ async function removeOwnedRegularFile(filePath, runtimeDirectory, platform) {
   }
 }
 
-export async function assessRuntimeDescriptorState(runtimePaths, deps = {}) {
-  const platform = deps.platform ?? process.platform
-  const isProcessAlive = deps.isProcessAlive ?? defaultProcessLivenessProbe
-  let raw
-  try {
-    const fileStat = await lstat(runtimePaths.descriptorPath)
-    if (fileStat.isSymbolicLink()) {
-      return { kind: 'stale' }
-    }
-    if (fileStat.size > MAX_DESCRIPTOR_BYTES) {
-      return { kind: 'stale' }
-    }
-    raw = await readFile(runtimePaths.descriptorPath, 'utf8')
-  } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') {
-      return { kind: 'stale' }
-    }
-    throw error
-  }
-
-  const parsed = parseDescriptorBounded(raw)
-  if (!parsed.ok) {
-    return { kind: 'stale' }
-  }
-  if (isProcessAlive(parsed.descriptor.pid)) {
-    return { kind: 'live_companion', pid: parsed.descriptor.pid }
-  }
-  return { kind: 'stale' }
-}
-
 export async function cleanStaleRuntimeArtifacts(runtimePaths, deps = {}) {
   const platform = deps.platform ?? process.platform
   await removeOwnedRegularFile(runtimePaths.descriptorPath, runtimePaths.runtimeDirectory, platform)
@@ -220,10 +379,8 @@ export async function cleanStaleRuntimeArtifacts(runtimePaths, deps = {}) {
 
 export function companionBinPath(pluginsDir, platform = process.platform) {
   const binName = platform === 'win32' ? 'tabby-secure-mcp.cmd' : 'tabby-secure-mcp'
-  if (platform === 'win32') {
-    return path.win32.join(pluginsDir, 'node_modules', '.bin', binName)
-  }
-  return path.join(pluginsDir, 'node_modules', '.bin', binName)
+  const pathApi = platformPathApi(platform)
+  return pathApi.join(pluginsDir, 'node_modules', '.bin', binName)
 }
 
 export async function verifyInstalledLayout(pluginsDir, deps = {}) {
@@ -249,6 +406,26 @@ export async function verifyInstalledLayout(pluginsDir, deps = {}) {
   await stat(companionBinPath(pluginsDir, platform))
 }
 
+export async function assertNoFileDependencyPersistence(pluginsDir) {
+  const manifestPaths = [
+    path.join(pluginsDir, 'package.json'),
+    path.join(pluginsDir, 'package-lock.json'),
+  ]
+  for (const manifestPath of manifestPaths) {
+    try {
+      const raw = await readFile(manifestPath, 'utf8')
+      if (raw.includes('file:')) {
+        throw new Error(`${manifestPath} must not persist file: dependency references`)
+      }
+    } catch (error) {
+      if (error && typeof error === 'object' && error.code === 'ENOENT') {
+        continue
+      }
+      throw error
+    }
+  }
+}
+
 function defaultProcessLivenessProbe(pid) {
   try {
     process.kill(pid, 0)
@@ -260,48 +437,6 @@ function defaultProcessLivenessProbe(pid) {
     }
     return true
   }
-}
-
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd ?? repoRoot,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: options.env ?? process.env,
-      shell: false,
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr })
-      } else {
-        reject(new Error(`${command} ${args.join(' ')} failed (${code}): ${stderr || stdout}`))
-      }
-    })
-  })
-}
-
-async function packWorkspacePackage(workspacePath, destinationDir) {
-  const { stdout } = await runCommand(
-    'npm',
-    ['pack', '-w', workspacePath, '--pack-destination', destinationDir],
-    {
-      cwd: repoRoot,
-    },
-  )
-  const tarballName = stdout.trim().split('\n').pop()?.trim()
-  if (!tarballName) {
-    throw new Error(`npm pack produced no tarball for ${workspacePath}`)
-  }
-  return path.join(destinationDir, tarballName)
 }
 
 export async function runInstall(options = {}) {
@@ -319,14 +454,12 @@ export async function runInstall(options = {}) {
     homedir: options.homedir,
     tmpdir: options.tmpdir,
   })
-  const runtimeState = await assessRuntimeDescriptorState(runtimePaths, {
+  const runtimeAssessment = await assessRuntimeCleanupSafety(runtimePaths, {
     platform,
     isProcessAlive: options.isProcessAlive,
   })
-  if (runtimeState.kind === 'live_companion') {
-    throw new Error(
-      `tabby-secure-mcp companion is still running (pid ${runtimeState.pid}). Stop the companion process and retry.`,
-    )
+  if (runtimeAssessment.status === 'blocked') {
+    throw new Error(runtimeAssessment.message)
   }
   await cleanStaleRuntimeArtifacts(runtimePaths, { platform })
 
@@ -334,35 +467,51 @@ export async function runInstall(options = {}) {
     await runCommand('npm', ['run', 'build'], { cwd: repoRoot, env: options.env })
   }
 
+  const ownsPackDir = options.packDir === undefined
   const packDir = options.packDir ?? await mkdtemp(path.join(nodeTmpdir(), 'tabby-secure-mcp-pack-'))
-  const pluginTarball = await packWorkspacePackage('packages/tabby-plugin', packDir)
-  const companionTarball = await packWorkspacePackage('packages/companion', packDir)
+  try {
+    const pluginPack = await packWorkspacePackage('packages/tabby-plugin', packDir, {
+      cwd: repoRoot,
+      env: options.env,
+    })
+    const companionPack = await packWorkspacePackage('packages/companion', packDir, {
+      cwd: repoRoot,
+      env: options.env,
+    })
 
-  await mkdir(pluginsDir, { recursive: true })
-  await runCommand(
-    'npm',
-    [
-      'install',
-      '--prefix',
-      pluginsDir,
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
-      '--save-exact',
-      pluginTarball,
-      companionTarball,
-    ],
-    { cwd: repoRoot, env: options.env },
-  )
+    await mkdir(pluginsDir, { recursive: true })
+    await runCommand(
+      'npm',
+      [
+        'install',
+        '--prefix',
+        pluginsDir,
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+        '--no-save',
+        '--legacy-peer-deps',
+        pluginPack.tarballPath,
+        companionPack.tarballPath,
+      ],
+      { cwd: repoRoot, env: options.env },
+    )
 
-  await verifyInstalledLayout(pluginsDir, { platform })
+    await verifyInstalledLayout(pluginsDir, { platform })
+    await assertNoFileDependencyPersistence(pluginsDir)
 
-  if (!options.keepPackDir) {
-    await rm(packDir, { recursive: true, force: true }).catch(() => undefined)
+    const companionCommand = platformPathApi(platform).resolve(companionBinPath(pluginsDir, platform))
+    return {
+      pluginsDir: platformPathApi(platform).resolve(pluginsDir),
+      companionCommand,
+      pluginPack,
+      companionPack,
+    }
+  } finally {
+    if (ownsPackDir && !options.keepPackDir) {
+      await rm(packDir, { recursive: true, force: true }).catch(() => undefined)
+    }
   }
-
-  const companionCommand = path.resolve(companionBinPath(pluginsDir, platform))
-  return { pluginsDir: path.resolve(pluginsDir), companionCommand }
 }
 
 export async function main(argv = process.argv.slice(2)) {

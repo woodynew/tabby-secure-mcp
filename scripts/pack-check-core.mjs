@@ -1,43 +1,14 @@
-import { spawn } from 'node:child_process'
 import { createReadStream } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { createGunzip } from 'node:zlib'
+
+import { packWorkspacePackage } from './npm-pack-utils.mjs'
 
 export const EXPECTED_VERSION = '0.1.0'
 export const PLUGIN_PACKAGE_NAME = 'tabby-secure-mcp'
 export const COMPANION_PACKAGE_NAME = '@tabby-secure-mcp/companion'
-
-const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
-
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd ?? repoRoot,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: options.env ?? process.env,
-      shell: false,
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', reject)
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr })
-      } else {
-        reject(new Error(`${command} ${args.join(' ')} failed (${code}): ${stderr || stdout}`))
-      }
-    })
-  })
-}
 
 async function readEntireStream(stream) {
   const chunks = []
@@ -118,6 +89,14 @@ export function assertPackManifest(manifest, label) {
   if (manifest.version !== EXPECTED_VERSION) {
     throw new Error(`${label} tarball version must be ${EXPECTED_VERSION}`)
   }
+  if (label === 'companion') {
+    for (const section of ['dependencies', 'optionalDependencies']) {
+      const deps = manifest[section]
+      if (deps && typeof deps === 'object' && Object.keys(deps).length > 0) {
+        throw new Error('companion tarball must not declare runtime dependencies')
+      }
+    }
+  }
   const dependencySections = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
   for (const section of dependencySections) {
     const deps = manifest[section]
@@ -161,85 +140,72 @@ export function packTar(files) {
   return Buffer.concat(chunks)
 }
 
-async function packWorkspace(workspacePath, destinationDir) {
-  const { stdout } = await runCommand('npm', ['pack', '-w', workspacePath, '--pack-destination', destinationDir])
-  const tarballName = stdout.trim().split('\n').pop()?.trim()
-  if (!tarballName) {
-    throw new Error(`npm pack produced no tarball for ${workspacePath}`)
-  }
-  return path.join(destinationDir, tarballName)
-}
-
 export async function inspectPackedTarball(options = {}) {
   const packDir =
     options.packDir ?? await mkdtemp(path.join(tmpdir(), 'tabby-secure-mcp-pack-check-'))
   const shouldCleanup = options.packDir === undefined
 
-  if (options.runPack ?? true) {
-    await packWorkspace('packages/tabby-plugin', packDir)
-    await packWorkspace('packages/companion', packDir)
-  }
+  try {
+    if (options.runPack ?? true) {
+      await packWorkspacePackage('packages/tabby-plugin', packDir)
+      await packWorkspacePackage('packages/companion', packDir)
+    }
 
-  const files = await import('node:fs/promises').then(({ readdir }) => readdir(packDir))
-  const pluginTarball = `tabby-secure-mcp-${EXPECTED_VERSION}.tgz`
-  const companionTarball = `tabby-secure-mcp-companion-${EXPECTED_VERSION}.tgz`
-  if (!files.includes(pluginTarball) || !files.includes(companionTarball)) {
-    throw new Error('expected plugin and companion tarballs in pack directory')
-  }
-  const pluginPath = path.join(packDir, pluginTarball)
-  const companionPath = path.join(packDir, companionTarball)
+    const pluginPath = path.join(packDir, `tabby-secure-mcp-${EXPECTED_VERSION}.tgz`)
+    const companionPath = path.join(packDir, `tabby-secure-mcp-companion-${EXPECTED_VERSION}.tgz`)
 
-  const pluginEntries = await listTarballEntries(pluginPath)
-  const companionEntries = await listTarballEntries(companionPath)
-  assertAllowedEntries(pluginEntries, 'plugin', ['dist/index.js', 'package.json'])
-  assertAllowedEntries(companionEntries, 'companion', ['dist/cli.js', 'package.json'])
+    const pluginEntries = await listTarballEntries(pluginPath)
+    const companionEntries = await listTarballEntries(companionPath)
+    assertAllowedEntries(pluginEntries, 'plugin', ['dist/index.js', 'package.json'])
+    assertAllowedEntries(companionEntries, 'companion', ['dist/cli.js', 'package.json'])
 
-  const pluginManifest = await listPackageJsonFromTarball(pluginPath)
-  const companionManifest = await listPackageJsonFromTarball(companionPath)
-  assertPackManifest(pluginManifest, 'plugin')
-  assertPackManifest(companionManifest, 'companion')
-  if (pluginManifest.name !== PLUGIN_PACKAGE_NAME) {
-    throw new Error('plugin tarball name mismatch')
-  }
-  if (companionManifest.name !== COMPANION_PACKAGE_NAME) {
-    throw new Error('companion tarball name mismatch')
-  }
+    const pluginManifest = await listPackageJsonFromTarball(pluginPath)
+    const companionManifest = await listPackageJsonFromTarball(companionPath)
+    assertPackManifest(pluginManifest, 'plugin')
+    assertPackManifest(companionManifest, 'companion')
+    if (pluginManifest.name !== PLUGIN_PACKAGE_NAME) {
+      throw new Error('plugin tarball name mismatch')
+    }
+    if (companionManifest.name !== COMPANION_PACKAGE_NAME) {
+      throw new Error('companion tarball name mismatch')
+    }
 
-  const pluginBundle = (await readTarEntry(pluginPath, 'dist/index.js')).data.toString('utf8')
-  const companionCliRecord = await readTarEntry(companionPath, 'dist/cli.js')
-  const companionShebang = companionCliRecord.data.subarray(0, 20).toString('utf8')
+    const pluginBundle = (await readTarEntry(pluginPath, 'dist/index.js')).data.toString('utf8')
+    const companionCliRecord = await readTarEntry(companionPath, 'dist/cli.js')
+    const companionShebang = companionCliRecord.data.subarray(0, 20).toString('utf8')
 
-  const result = {
-    plugin: {
-      version: pluginManifest.version,
-      entries: pluginEntries,
-      bundle: pluginBundle,
-    },
-    companion: {
-      version: companionManifest.version,
-      entries: companionEntries,
-      shebang: companionShebang.startsWith('#!/usr/bin/env node')
-        ? companionShebang.slice(0, companionShebang.indexOf('\n') + 1)
-        : companionShebang,
-      mode: companionCliRecord.mode,
-    },
-  }
+    const result = {
+      plugin: {
+        version: pluginManifest.version,
+        entries: pluginEntries,
+        bundle: pluginBundle,
+      },
+      companion: {
+        version: companionManifest.version,
+        entries: companionEntries,
+        shebang: companionShebang.startsWith('#!/usr/bin/env node')
+          ? companionShebang.slice(0, companionShebang.indexOf('\n') + 1)
+          : companionShebang,
+        mode: companionCliRecord.mode,
+      },
+    }
 
-  if (!result.plugin.bundle.match(/webpackUniversalModuleDefinition|module\.exports/)) {
-    throw new Error('plugin bundle is missing a UMD export signature')
-  }
-  if (!result.companion.shebang.startsWith('#!/usr/bin/env node')) {
-    throw new Error('companion CLI is missing a Node shebang')
-  }
-  if ((result.companion.mode & 0o111) === 0) {
-    throw new Error('companion CLI tarball entry is not marked executable')
-  }
+    if (!result.plugin.bundle.match(/webpackUniversalModuleDefinition|module\.exports/)) {
+      throw new Error('plugin bundle is missing a UMD export signature')
+    }
+    if (!result.companion.shebang.startsWith('#!/usr/bin/env node')) {
+      throw new Error('companion CLI is missing a Node shebang')
+    }
+    if ((result.companion.mode & 0o111) === 0) {
+      throw new Error('companion CLI tarball entry is not marked executable')
+    }
 
-  if (shouldCleanup) {
-    await rm(packDir, { recursive: true, force: true }).catch(() => undefined)
+    return result
+  } finally {
+    if (shouldCleanup) {
+      await rm(packDir, { recursive: true, force: true }).catch(() => undefined)
+    }
   }
-
-  return result
 }
 
 export async function main() {

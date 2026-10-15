@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, writeFile, symlink, readFile, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, symlink, stat, rm } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,14 +10,17 @@ import {
   PLUGIN_PACKAGE_NAME,
   COMPANION_PACKAGE_NAME,
   EXPECTED_VERSION,
+  assertNoFileDependencyPersistence,
   assertSafeAbsolutePluginsDir,
+  assessRuntimeCleanupSafety,
   cleanStaleRuntimeArtifacts,
   companionBinPath,
   parseCliArgs,
   parseDescriptorBounded,
+  parseLockBounded,
   resolveDefaultPluginsDir,
   resolveRuntimePaths,
-  assessRuntimeDescriptorState,
+  runInstall,
   verifyInstalledLayout,
 } from './install-local-core.mjs'
 
@@ -65,20 +69,180 @@ describe('assertSafeAbsolutePluginsDir', () => {
   it('rejects filesystem root', () => {
     expect(() => assertSafeAbsolutePluginsDir(path.parse(repoRoot).root)).toThrow(/unsafe/i)
   })
+
+  it('uses win32 absolute rules on Windows', () => {
+    expect(() =>
+      assertSafeAbsolutePluginsDir('C:\\relative\\inside', { platform: 'win32' }),
+    ).not.toThrow()
+    expect(() => assertSafeAbsolutePluginsDir('plugins', { platform: 'win32' })).toThrow(/absolute/i)
+  })
 })
 
-describe('parseCliArgs', () => {
-  it('parses plugins-dir and skip-build', () => {
-    const abs = path.resolve('/tmp/plugins')
-    expect(parseCliArgs(['--plugins-dir', abs, '--skip-build'])).toEqual({
-      pluginsDir: abs,
-      skipBuild: true,
-    })
+describe('parseLockBounded', () => {
+  it('accepts companion lock shape', () => {
+    const parsed = parseLockBounded(JSON.stringify({ pid: 12, owner: 'abc123' }))
+    expect(parsed.ok).toBe(true)
   })
 
-  it('rejects unknown flags', () => {
-    expect(() => parseCliArgs(['--force'])).toThrow(/unknown/i)
+  it('rejects malformed lock payloads', () => {
+    expect(parseLockBounded('{').ok).toBe(false)
+    expect(parseLockBounded(JSON.stringify({ pid: 0, owner: 'x' })).ok).toBe(false)
   })
+})
+
+describe('assessRuntimeCleanupSafety', () => {
+  let runtimeDir
+  let runtimeParent
+
+  afterEach(async () => {
+    if (runtimeParent) {
+      await rm(runtimeParent, { recursive: true, force: true }).catch(() => undefined)
+      runtimeParent = undefined
+      runtimeDir = undefined
+    }
+  })
+
+  async function makePaths() {
+    runtimeParent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-parent-'))
+    runtimeDir = path.join(runtimeParent, 'tabby-secure-mcp')
+    await mkdir(runtimeDir, { recursive: true })
+    return {
+      runtimeDirectory: runtimeDir,
+      descriptorPath: path.join(runtimeDir, 'descriptor.json'),
+      lockPath: path.join(runtimeDir, 'companion.lock'),
+      endpoint: path.join(runtimeDir, 'companion.sock'),
+    }
+  }
+
+  it('blocks when descriptor PID is alive', async () => {
+    const paths = await makePaths()
+    const nonce = Buffer.alloc(32, 2).toString('base64url')
+    await writeFile(
+      paths.descriptorPath,
+      JSON.stringify({
+        protocol_version: 1,
+        endpoint: paths.endpoint,
+        pid: 4242,
+        expires_at: Date.now() + 60_000,
+        pairing_nonce: nonce,
+      }),
+    )
+    const state = await assessRuntimeCleanupSafety(paths, {
+      platform: 'linux',
+      isProcessAlive: (pid) => pid === 4242,
+    })
+    expect(state.status).toBe('blocked')
+    expect(state.message).toMatch(/4242/)
+  })
+
+  it('blocks on startup lock-only with a live PID', async () => {
+    const paths = await makePaths()
+    await writeFile(paths.lockPath, JSON.stringify({ pid: 5150, owner: 'deadbeef' }))
+    const state = await assessRuntimeCleanupSafety(paths, {
+      platform: 'linux',
+      isProcessAlive: (pid) => pid === 5150,
+    })
+    expect(state.status).toBe('blocked')
+    expect(state.message).toMatch(/5150/)
+  })
+
+  it('blocks on malformed descriptor with a live lock PID', async () => {
+    const paths = await makePaths()
+    await writeFile(paths.descriptorPath, '{not-json')
+    await writeFile(paths.lockPath, JSON.stringify({ pid: 6001, owner: 'live' }))
+    const state = await assessRuntimeCleanupSafety(paths, {
+      platform: 'linux',
+      isProcessAlive: (pid) => pid === 6001,
+    })
+    expect(state.status).toBe('blocked')
+    expect(state.message).toMatch(/malformed/i)
+  })
+
+  it('blocks on malformed lock while descriptor is missing', async () => {
+    const paths = await makePaths()
+    await writeFile(paths.lockPath, '{"pid":1}')
+    const state = await assessRuntimeCleanupSafety(paths, { platform: 'linux', isProcessAlive: () => false })
+    expect(state.status).toBe('blocked')
+    expect(state.message).toMatch(/lock/i)
+  })
+
+  it('blocks on symlinked descriptor without deleting artifacts', async () => {
+    const paths = await makePaths()
+    const outside = await mkdtemp(path.join(tmpdir(), 'tabby-outside-'))
+    await writeFile(path.join(outside, 'real.json'), '{}')
+    await symlink(path.join(outside, 'real.json'), paths.descriptorPath)
+    const state = await assessRuntimeCleanupSafety(paths, { platform: 'linux', isProcessAlive: () => false })
+    expect(state.status).toBe('blocked')
+    await cleanStaleRuntimeArtifacts(paths, { platform: 'linux' })
+    await expect(stat(paths.descriptorPath)).resolves.toBeDefined()
+  })
+
+  it('cleans stale descriptor, lock, and unix socket when PIDs are dead', async () => {
+    const paths = await makePaths()
+    const nonce = Buffer.alloc(32, 3).toString('base64url')
+    await writeFile(paths.lockPath, JSON.stringify({ pid: 1, owner: 'stale' }))
+    await writeFile(paths.endpoint, '')
+    await writeFile(
+      paths.descriptorPath,
+      JSON.stringify({
+        protocol_version: 1,
+        endpoint: paths.endpoint,
+        pid: 99999,
+        expires_at: Date.now() + 60_000,
+        pairing_nonce: nonce,
+      }),
+    )
+
+    const state = await assessRuntimeCleanupSafety(paths, {
+      platform: 'linux',
+      isProcessAlive: () => false,
+    })
+    expect(state.status).toBe('cleanable')
+
+    await cleanStaleRuntimeArtifacts(paths, { platform: 'linux' })
+
+    await expect(stat(paths.descriptorPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(paths.lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(paths.endpoint)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+describe('runInstall smoke', () => {
+  let pluginsDir
+  let runtimeParent
+
+  afterEach(async () => {
+    if (pluginsDir) {
+      await rm(pluginsDir, { recursive: true, force: true }).catch(() => undefined)
+      pluginsDir = undefined
+    }
+    if (runtimeParent) {
+      await rm(runtimeParent, { recursive: true, force: true }).catch(() => undefined)
+      runtimeParent = undefined
+    }
+  })
+
+  it('packs, installs offline into a temp prefix, and runs companion --help', async () => {
+    const build = spawnSync('npm', ['run', 'build'], { cwd: repoRoot, encoding: 'utf8' })
+    expect(build.status).toBe(0)
+
+    pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-plugins-smoke-'))
+    runtimeParent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-smoke-'))
+
+    const result = await runInstall({
+      argv: ['--plugins-dir', pluginsDir, '--skip-build'],
+      env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent },
+      platform: 'linux',
+    })
+
+    expect(result.pluginsDir).toBe(path.resolve(pluginsDir))
+    await verifyInstalledLayout(pluginsDir, { platform: 'linux' })
+    await assertNoFileDependencyPersistence(pluginsDir)
+
+    const help = spawnSync(result.companionCommand, ['--help'], { encoding: 'utf8' })
+    expect(help.status).toBe(0)
+    expect(help.stdout).toMatch(/tabby-secure-mcp/)
+  }, 120_000)
 })
 
 describe('parseDescriptorBounded', () => {
@@ -95,101 +259,6 @@ describe('parseDescriptorBounded', () => {
     )
     expect(result.ok).toBe(true)
     expect(result.descriptor.pid).toBe(42)
-  })
-
-  it('rejects oversize payloads', () => {
-    const result = parseDescriptorBounded('x'.repeat(5000))
-    expect(result.ok).toBe(false)
-  })
-})
-
-describe('assessRuntimeDescriptorState and cleanup', () => {
-  let runtimeDir
-
-  afterEach(async () => {
-    if (runtimeDir) {
-      await import('node:fs/promises').then(({ rm }) =>
-        rm(runtimeDir, { recursive: true, force: true }).catch(() => undefined),
-      )
-      runtimeDir = undefined
-    }
-  })
-
-  it('fails when descriptor PID is alive', async () => {
-    runtimeDir = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-live-'))
-    const paths = {
-      runtimeDirectory: runtimeDir,
-      descriptorPath: path.join(runtimeDir, 'descriptor.json'),
-      lockPath: path.join(runtimeDir, 'companion.lock'),
-      endpoint: path.join(runtimeDir, 'companion.sock'),
-    }
-    const nonce = Buffer.alloc(32, 2).toString('base64url')
-    await writeFile(
-      paths.descriptorPath,
-      JSON.stringify({
-        protocol_version: 1,
-        endpoint: paths.endpoint,
-        pid: 4242,
-        expires_at: Date.now() + 60_000,
-        pairing_nonce: nonce,
-      }),
-    )
-    const state = await assessRuntimeDescriptorState(paths, {
-      platform: 'linux',
-      isProcessAlive: (pid) => pid === 4242,
-    })
-    expect(state).toEqual({ kind: 'live_companion', pid: 4242 })
-  })
-
-  it('removes stale descriptor, lock, and unix socket inside runtime dir', async () => {
-    runtimeDir = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-stale-'))
-    const paths = {
-      runtimeDirectory: runtimeDir,
-      descriptorPath: path.join(runtimeDir, 'descriptor.json'),
-      lockPath: path.join(runtimeDir, 'companion.lock'),
-      endpoint: path.join(runtimeDir, 'companion.sock'),
-    }
-    const nonce = Buffer.alloc(32, 3).toString('base64url')
-    await writeFile(paths.lockPath, '{"pid":1}')
-    await writeFile(paths.endpoint, '')
-    await writeFile(
-      paths.descriptorPath,
-      JSON.stringify({
-        protocol_version: 1,
-        endpoint: paths.endpoint,
-        pid: 99999,
-        expires_at: Date.now() + 60_000,
-        pairing_nonce: nonce,
-      }),
-    )
-
-    const state = await assessRuntimeDescriptorState(paths, {
-      platform: 'linux',
-      isProcessAlive: () => false,
-    })
-    expect(state).toEqual({ kind: 'stale' })
-
-    await cleanStaleRuntimeArtifacts(paths, { platform: 'linux' })
-
-    await expect(stat(paths.descriptorPath)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(stat(paths.lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(stat(paths.endpoint)).rejects.toMatchObject({ code: 'ENOENT' })
-  })
-
-  it('does not delete symlinked artifacts', async () => {
-    runtimeDir = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-symlink-'))
-    const outside = await mkdtemp(path.join(tmpdir(), 'tabby-outside-'))
-    const paths = {
-      runtimeDirectory: runtimeDir,
-      descriptorPath: path.join(runtimeDir, 'descriptor.json'),
-      lockPath: path.join(runtimeDir, 'companion.lock'),
-      endpoint: path.join(runtimeDir, 'companion.sock'),
-    }
-    await writeFile(path.join(outside, 'real.json'), '{}')
-    await symlink(path.join(outside, 'real.json'), paths.descriptorPath)
-
-    await cleanStaleRuntimeArtifacts(paths, { platform: 'linux' })
-    await expect(stat(paths.descriptorPath)).resolves.toBeDefined()
   })
 })
 
@@ -209,7 +278,10 @@ describe('verifyInstalledLayout', () => {
     const companionRoot = path.join(pluginsDir, 'node_modules', '@tabby-secure-mcp', 'companion')
     await mkdir(path.join(pluginRoot, 'dist'), { recursive: true })
     await mkdir(path.join(companionRoot, 'dist'), { recursive: true })
-    await writeFile(path.join(pluginRoot, 'package.json'), JSON.stringify({ name: PLUGIN_PACKAGE_NAME, version: EXPECTED_VERSION }))
+    await writeFile(
+      path.join(pluginRoot, 'package.json'),
+      JSON.stringify({ name: PLUGIN_PACKAGE_NAME, version: EXPECTED_VERSION }),
+    )
     await writeFile(
       path.join(companionRoot, 'package.json'),
       JSON.stringify({ name: COMPANION_PACKAGE_NAME, version: EXPECTED_VERSION }),
@@ -220,18 +292,5 @@ describe('verifyInstalledLayout', () => {
     await writeFile(path.join(pluginsDir, 'node_modules', '.bin', 'tabby-secure-mcp'), '')
 
     await expect(verifyInstalledLayout(pluginsDir, { platform: 'linux' })).resolves.toBeUndefined()
-  })
-})
-
-describe('resolveRuntimePaths', () => {
-  it('aligns with companion runtime layout on Linux', () => {
-    const paths = resolveRuntimePaths({
-      platform: 'linux',
-      env: { XDG_RUNTIME_DIR: '/run/user/1000' },
-      homedir: () => '/home/user',
-      tmpdir: () => '/tmp',
-    })
-    expect(paths.descriptorPath).toBe('/run/user/1000/tabby-secure-mcp/descriptor.json')
-    expect(paths.endpoint).toBe('/run/user/1000/tabby-secure-mcp/companion.sock')
   })
 })

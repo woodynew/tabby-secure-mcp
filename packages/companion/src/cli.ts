@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { unlink } from 'node:fs/promises'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import { serveStdio } from '@modelcontextprotocol/server/stdio'
 
@@ -32,6 +33,11 @@ async function removeIfOwned(path: string, owned: boolean): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    process.stdout.write('tabby-secure-mcp stdio MCP companion\n')
+    return
+  }
+
   const paths = createRuntimePaths()
   const pairingNonce = createPairingNonce(randomBytes)
   const descriptor: RuntimeDescriptor = {
@@ -104,7 +110,18 @@ async function main(): Promise<void> {
   }
 }
 
-const entry = process.argv[1]
-if (entry && import.meta.url === pathToFileURL(entry).href) {
+function isCliMain(): boolean {
+  const entry = process.argv[1]
+  if (!entry) {
+    return false
+  }
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+}
+
+if (isCliMain()) {
   void main()
 }
