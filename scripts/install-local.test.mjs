@@ -10,14 +10,16 @@ import {
   PLUGIN_PACKAGE_NAME,
   COMPANION_PACKAGE_NAME,
   EXPECTED_VERSION,
-  assertNoFileDependencyPersistence,
+  assertNoTransientInstallerReferences,
   assertSafeAbsolutePluginsDir,
   assessRuntimeCleanupSafety,
   cleanStaleRuntimeArtifacts,
   companionBinPath,
+  listInstallerMetadataPaths,
   parseCliArgs,
   parseDescriptorBounded,
   parseLockBounded,
+  removeTransientInstallerMetadata,
   resolveDefaultPluginsDir,
   resolveRuntimePaths,
   runInstall,
@@ -71,10 +73,25 @@ describe('assertSafeAbsolutePluginsDir', () => {
   })
 
   it('uses win32 absolute rules on Windows', () => {
-    expect(() =>
-      assertSafeAbsolutePluginsDir('C:\\relative\\inside', { platform: 'win32' }),
-    ).not.toThrow()
+    expect(assertSafeAbsolutePluginsDir('C:\\Tabby\\plugins', { platform: 'win32' })).toBe(
+      'C:\\Tabby\\plugins',
+    )
     expect(() => assertSafeAbsolutePluginsDir('plugins', { platform: 'win32' })).toThrow(/absolute/i)
+    expect(() => assertSafeAbsolutePluginsDir('C:\\', { platform: 'win32' })).toThrow(/unsafe/i)
+  })
+})
+
+describe('parseCliArgs', () => {
+  it('parses plugins-dir and skip-build', () => {
+    const abs = path.resolve('/tmp/plugins')
+    expect(parseCliArgs(['--plugins-dir', abs, '--skip-build'])).toEqual({
+      pluginsDir: abs,
+      skipBuild: true,
+    })
+  })
+
+  it('rejects unknown flags', () => {
+    expect(() => parseCliArgs(['--force'])).toThrow(/unknown/i)
   })
 })
 
@@ -207,6 +224,41 @@ describe('assessRuntimeCleanupSafety', () => {
   })
 })
 
+describe('installer metadata', () => {
+  it('rejects synthetic hidden package-lock file references', async () => {
+    const pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-metadata-'))
+    await mkdir(path.join(pluginsDir, 'node_modules'), { recursive: true })
+    await writeFile(
+      path.join(pluginsDir, 'node_modules', '.package-lock.json'),
+      JSON.stringify({ dependencies: { demo: 'file:/tmp/evil.tgz' } }),
+    )
+    await expect(assertNoTransientInstallerReferences(pluginsDir)).rejects.toThrow(/file:/i)
+    await removeTransientInstallerMetadata(pluginsDir)
+    await expect(assertNoTransientInstallerReferences(pluginsDir)).resolves.toBeUndefined()
+  })
+
+  it('includes hidden node_modules lock in metadata scan paths', () => {
+    const pluginsDir = '/tmp/plugins'
+    expect(listInstallerMetadataPaths(pluginsDir)).toContain(
+      path.join(pluginsDir, 'node_modules', '.package-lock.json'),
+    )
+  })
+})
+
+describe('resolveRuntimePaths win32', () => {
+  it('uses LOCALAPPDATA runtime layout on Windows', () => {
+    const paths = resolveRuntimePaths({
+      platform: 'win32',
+      env: { LOCALAPPDATA: 'C:\\Users\\user\\AppData\\Local' },
+      homedir: () => 'C:\\Users\\user',
+    })
+    expect(paths.runtimeDirectory).toBe('C:\\Users\\user\\AppData\\Local\\tabby-secure-mcp')
+    expect(paths.descriptorPath).toBe(
+      'C:\\Users\\user\\AppData\\Local\\tabby-secure-mcp\\descriptor.json',
+    )
+  })
+})
+
 describe('runInstall smoke', () => {
   let pluginsDir
   let runtimeParent
@@ -229,15 +281,23 @@ describe('runInstall smoke', () => {
     pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-plugins-smoke-'))
     runtimeParent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-smoke-'))
 
+    const packDir = await mkdtemp(path.join(tmpdir(), 'tabby-pack-smoke-'))
     const result = await runInstall({
       argv: ['--plugins-dir', pluginsDir, '--skip-build'],
       env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent },
       platform: 'linux',
+      packDir,
+      keepPackDir: true,
     })
 
     expect(result.pluginsDir).toBe(path.resolve(pluginsDir))
     await verifyInstalledLayout(pluginsDir, { platform: 'linux' })
-    await assertNoFileDependencyPersistence(pluginsDir)
+    await assertNoTransientInstallerReferences(pluginsDir)
+    await expect(stat(result.pluginPack.tarballPath)).resolves.toBeDefined()
+    await expect(stat(result.companionPack.tarballPath)).resolves.toBeDefined()
+
+    await rm(packDir, { recursive: true, force: true })
+    await assertNoTransientInstallerReferences(pluginsDir)
 
     const help = spawnSync(result.companionCommand, ['--help'], { encoding: 'utf8' })
     expect(help.status).toBe(0)

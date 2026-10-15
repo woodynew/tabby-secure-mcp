@@ -119,7 +119,12 @@ Fully quit and restart Claude Desktop after changes.
 
 ## Windsurf
 
-Edit `~/.codeium/windsurf/mcp_config.json` (create the file if missing):
+Edit the Windsurf MCP config file (create it if missing):
+
+| OS | Config path |
+| --- | --- |
+| Linux / macOS | `~/.codeium/windsurf/mcp_config.json` |
+| Windows | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
 
 ```json
 {
@@ -136,12 +141,28 @@ On Windows, use the `.cmd` path with JSON escaping as in the Cursor example.
 
 ## Troubleshooting
 
+### Companion runtime directories
+
+The stdio companion stores IPC metadata outside the Tabby plugins directory. Only remove files you recognize as stale **after** stopping every MCP client and confirming no `tabby-secure-mcp` companion process is running. Do not delete artifacts belonging to a live companion PID.
+
+| OS | Runtime directory | Typical files |
+| --- | --- | --- |
+| Linux | `$XDG_RUNTIME_DIR/tabby-secure-mcp` or `/tmp/tabby-secure-mcp` | `descriptor.json`, `companion.lock`, `companion.sock` |
+| macOS | `$TMPDIR/tabby-secure-mcp` (for example `/var/folders/.../tabby-secure-mcp`) | `descriptor.json`, `companion.lock`, `companion.sock` |
+| Windows | `%LOCALAPPDATA%\tabby-secure-mcp` | `descriptor.json`, `companion.lock` (named pipe endpoint; do not delete pipes manually) |
+
+### Fail-closed installer safety
+
+`install:local` refuses to modify runtime artifacts when the descriptor or lock is a symbolic link, malformed, oversize, or paired with a live companion PID (including lock-only startup). **Rerunning the installer does not automatically repair corruption** in those cases. Stop all companion clients, end stray `tabby-secure-mcp` processes, manually inspect the runtime directory above, remove only the known stale files when no live PID holds them, then rerun install.
+
+When cleanup is allowed (dead PIDs only), the installer may remove stale `descriptor.json`, `companion.lock`, and the Unix socket. It never deletes Windows named pipes.
+
 | Symptom | What to try |
 | --- | --- |
-| Installer refuses to run | Stop a running `tabby-secure-mcp` companion (stale `descriptor.json` with a live PID blocks cleanup). Quit MCP clients, end stray companion processes, then rerun `install:local`. |
+| Installer refuses to run | Follow **Fail-closed installer safety** above. Quit MCP clients, stop companion processes, inspect the runtime directory manually, then rerun `install:local`. |
 | Pairing never appears | Confirm Tabby is open, the plugin is installed under the plugins directory Tabby loads, and you restarted Tabby after install. |
 | Opens always denied | Check the 30s modal in Tabby, whitelist the profile in Secure MCP settings, and ensure you are approving the correct client. |
-| Stale IPC after crashes | Re-run `npm run install:local` (it removes stale descriptor, lock, and Unix socket when the companion is not running). On Windows, named pipes are not deleted by the installer. |
+| Stale IPC after crashes | Only when the installer reports a cleanable stale state: rerun `npm run install:local`. Otherwise use manual runtime cleanup (see above). On Windows, named pipes are not deleted by the installer. |
 | Wrong server version | Reinstall with `npm run install:local` so `tabby-secure-mcp` and `@tabby-secure-mcp/companion` stay at the same pinned version (`0.1.0`). |
 
 ## Validation scope

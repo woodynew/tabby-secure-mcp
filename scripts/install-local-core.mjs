@@ -406,12 +406,28 @@ export async function verifyInstalledLayout(pluginsDir, deps = {}) {
   await stat(companionBinPath(pluginsDir, platform))
 }
 
-export async function assertNoFileDependencyPersistence(pluginsDir) {
-  const manifestPaths = [
+export function listInstallerMetadataPaths(pluginsDir) {
+  return [
     path.join(pluginsDir, 'package.json'),
     path.join(pluginsDir, 'package-lock.json'),
+    path.join(pluginsDir, 'node_modules', '.package-lock.json'),
   ]
-  for (const manifestPath of manifestPaths) {
+}
+
+export async function removeTransientInstallerMetadata(pluginsDir) {
+  const hiddenLock = path.join(pluginsDir, 'node_modules', '.package-lock.json')
+  try {
+    await unlink(hiddenLock)
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return
+    }
+    throw error
+  }
+}
+
+export async function assertNoTransientInstallerReferences(pluginsDir) {
+  for (const manifestPath of listInstallerMetadataPaths(pluginsDir)) {
     try {
       const raw = await readFile(manifestPath, 'utf8')
       if (raw.includes('file:')) {
@@ -424,6 +440,11 @@ export async function assertNoFileDependencyPersistence(pluginsDir) {
       throw error
     }
   }
+}
+
+/** @deprecated Use assertNoTransientInstallerReferences */
+export async function assertNoFileDependencyPersistence(pluginsDir) {
+  return assertNoTransientInstallerReferences(pluginsDir)
 }
 
 function defaultProcessLivenessProbe(pid) {
@@ -498,7 +519,8 @@ export async function runInstall(options = {}) {
     )
 
     await verifyInstalledLayout(pluginsDir, { platform })
-    await assertNoFileDependencyPersistence(pluginsDir)
+    await removeTransientInstallerMetadata(pluginsDir)
+    await assertNoTransientInstallerReferences(pluginsDir)
 
     const companionCommand = platformPathApi(platform).resolve(companionBinPath(pluginsDir, platform))
     return {
