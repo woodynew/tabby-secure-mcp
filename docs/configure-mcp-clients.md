@@ -32,7 +32,7 @@ Companion binary after install:
 ## Behavior you should expect
 
 - The server exposes **only two tools**: list authorized SSH profiles (read-only) and open one authorized profile in a visible Tabby SSH tab. There is **no command execution or output streaming** tool.
-- The **first** tool call from a new MCP client triggers **pairing** in Tabby (approve or deny the client).
+- Starting the companion makes the Tabby plugin request **pairing**; no tool call can succeed until that pairing is approved.
 - Every **open** request shows a **30 second** approval modal in Tabby; timeout, Escape, closing the modal, or Tabby losing focus results in denial.
 - Profile listing is **read-only**; whitelisting happens only in Tabby settings.
 - **Tabby must be running** with the plugin active and the main window holding the companion lease for operations to succeed.
@@ -167,4 +167,4 @@ When cleanup is allowed (dead PIDs only), the installer may remove stale `descri
 
 ## Validation scope
 
-Client JSON shapes above follow published MCP stdio configuration patterns. **macOS and Windows** builds are exercised in CI (unit, integration, pack checks); **Linux GUI validation in real Tabby is pending Task 8**. Automated CI does not certify a specific Cursor, Claude, or Windsurf client version—retest after client upgrades.
+Client JSON shapes above follow published MCP stdio configuration patterns. **macOS and Windows** builds are exercised in CI (unit, integration, pack checks). The full flow is manually validated on **Linux with Tabby 1.0.238**; automated CI does not certify a specific Cursor, Claude, or Windsurf client version—retest after client upgrades.

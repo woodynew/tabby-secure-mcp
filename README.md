@@ -68,4 +68,7 @@ npm run test:scripts
 
 ## Release notes
 
-Linux GUI validation in Tabby is tracked in Task 8. macOS and Windows are covered by automated CI only until GUI smoke tests are recorded; see [release status](docs/release-status.md).
+The complete flow is manually validated on Linux with Tabby 1.0.238: plugin install,
+whitelist persistence, delayed pairing, minimal profile listing, approval-gated SSH
+open, and an `env` session check. macOS and Windows remain automated-CI-only until
+GUI smoke tests are recorded; see [release status](docs/release-status.md).
