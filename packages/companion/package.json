@@ -12,7 +12,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "esbuild src/cli.ts --bundle --format=esm --platform=node --target=node20 --outfile=dist/cli.js",
+    "build": "esbuild src/cli.ts --bundle --format=esm --platform=node --target=node20 --outfile=dist/cli.js --banner:js=\"#!/usr/bin/env node\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config ../../vitest.config.mts --root .",
     "test:integration": "vitest run --config ../../vitest.integration.config.mts --root .",
@@ -20,11 +20,11 @@
   },
   "dependencies": {
     "@tabby-secure-mcp/ipc-contract": "0.1.0",
-    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/server": "2.3.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "22.15.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
