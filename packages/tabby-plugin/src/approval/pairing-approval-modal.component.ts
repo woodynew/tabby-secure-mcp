@@ -36,6 +36,12 @@ export class PairingApprovalModalComponent {
     this.reject('blur')
   }
 
+  @HostListener('document:keydown.escape', ['$event'])
+  onEscape(event: KeyboardEvent): void {
+    event.preventDefault()
+    this.reject('escape')
+  }
+
   allow(): void {
     this.activeModal.close('allow')
   }

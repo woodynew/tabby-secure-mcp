@@ -39,6 +39,11 @@ export class AuthorizedProfilesService {
     return views
   }
 
+  clearRefCache(): void {
+    this.refToId.clear()
+    this.idToRef.clear()
+  }
+
   async resolveAuthorizedProfile(profileRef: string): Promise<PartialProfile<Profile>> {
     if (!isProfileRef(profileRef)) {
       throw new TargetUnavailableError()

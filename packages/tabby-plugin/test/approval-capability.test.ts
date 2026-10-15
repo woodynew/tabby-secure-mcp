@@ -18,6 +18,8 @@ function readProductionSources(): string {
     'approval/open-approval-modal.component.ts',
     'approval/pairing-approval-modal.component.ts',
     'services/authorized-profiles.service.ts',
+    'runtime/plugin-runtime-service.ts',
+    'audit/audit-service.ts',
   ]
   return files.map(file => readFileSync(resolve(SRC_ROOT, file), 'utf8')).join('\n')
 }

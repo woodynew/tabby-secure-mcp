@@ -34,6 +34,7 @@ describe('Tabby plugin webpack host dependencies', () => {
   it.each([
     '@angular/common/locales/en',
     '@angular/common/locales/extra/en',
+    '@tabby-secure-mcp/ipc-contract',
   ])('allows bundling %s', request => {
     expect(isExternal(request)).toBe(false)
   })

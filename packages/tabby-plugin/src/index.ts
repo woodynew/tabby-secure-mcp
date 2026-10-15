@@ -4,12 +4,17 @@ import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
 import { ConfigProvider, ProfilesService } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
-import { ApprovalGatekeeper, type LeaseEpochSource } from './approval/approval-gatekeeper'
+import { AuditService } from './audit/audit-service'
+import { ApprovalGatekeeper } from './approval/approval-gatekeeper'
 import { SystemMonotonicClock } from './approval/monotonic-clock'
 import { NgBootstrapApprovalPresenter } from './approval/ng-bootstrap-approval-presenter'
 import { OpenApprovalModalComponent } from './approval/open-approval-modal.component'
 import { PairingApprovalModalComponent } from './approval/pairing-approval-modal.component'
 import { SecureMcpConfigProvider } from './config/secure-mcp-config-provider'
+import { readTabbyBootstrapData } from './runtime/bootstrap-data'
+import { PluginRuntimeLifecycle } from './runtime/plugin-runtime-lifecycle'
+import { PluginRuntimeService } from './runtime/plugin-runtime-service'
+import { RuntimeLeaseState } from './runtime/runtime-lease-state'
 import { AuthorizedProfilesService } from './services/authorized-profiles.service'
 import { SecureMcpSettingsComponent } from './settings/secure-mcp-settings.component'
 import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab.provider'
@@ -23,6 +28,8 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
   ],
   providers: [
     AuthorizedProfilesService,
+    RuntimeLeaseState,
+    AuditService,
     NgBootstrapApprovalPresenter,
     {
       provide: ApprovalGatekeeper,
@@ -30,16 +37,40 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         authorizedProfiles: AuthorizedProfilesService,
         profilesService: ProfilesService,
         presenter: NgBootstrapApprovalPresenter,
+        leaseState: RuntimeLeaseState,
       ) =>
         new ApprovalGatekeeper(
           authorizedProfiles,
           profilesService,
           presenter,
           new SystemMonotonicClock(),
-          (() => null) as LeaseEpochSource,
+          () => leaseState.getLeaseEpoch(),
         ),
-      deps: [AuthorizedProfilesService, ProfilesService, NgBootstrapApprovalPresenter],
+      deps: [
+        AuthorizedProfilesService,
+        ProfilesService,
+        NgBootstrapApprovalPresenter,
+        RuntimeLeaseState,
+      ],
     },
+    {
+      provide: PluginRuntimeService,
+      useFactory: (
+        leaseState: RuntimeLeaseState,
+        gatekeeper: ApprovalGatekeeper,
+        authorizedProfiles: AuthorizedProfilesService,
+        audit: AuditService,
+      ) =>
+        new PluginRuntimeService(
+          readTabbyBootstrapData,
+          leaseState,
+          gatekeeper,
+          authorizedProfiles,
+          audit,
+        ),
+      deps: [RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService],
+    },
+    PluginRuntimeLifecycle,
     { provide: ConfigProvider, useClass: SecureMcpConfigProvider, multi: true },
     { provide: SettingsTabProvider, useClass: SecureMcpSettingsTabProvider, multi: true },
   ],
