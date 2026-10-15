@@ -87,6 +87,14 @@ export class LeaseManager {
     }
   }
 
+  disconnectWindowIfConnected(windowInstanceId: string): LeaseGrant | undefined {
+    const window = this.#windows.get(windowInstanceId)
+    if (!window?.connected) {
+      return undefined
+    }
+    return this.disconnectWindow(windowInstanceId)
+  }
+
   disconnectWindow(windowInstanceId: string): LeaseGrant {
     const window = this.#windows.get(windowInstanceId)
     if (!window) {

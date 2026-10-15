@@ -342,7 +342,11 @@ export class PluginGateway {
       return
     }
 
-    if (message.type === 'rpc_result') {
+    if (message.type === 'rpc_result' || message.type === 'rpc_cancelled') {
+      if (!this.#isHolderRpcPeer(peer)) {
+        this.#rejectPeer(peer.socket, 'unauthorized rpc reply')
+        return
+      }
       const pending = this.#pending.get(message.request_id)
       if (!pending || pending.cancelled) {
         return
@@ -351,24 +355,33 @@ export class PluginGateway {
         this.#settlePending(message.request_id, { ok: false, code: 'internal' })
         return
       }
-      if (!message.ok) {
-        this.#settlePending(message.request_id, { ok: false, code: message.error.code })
-        return
-      }
-      this.#settlePending(message.request_id, this.#mapSuccess(pending.method, message.result))
-      return
-    }
-
-    if (message.type === 'rpc_cancelled') {
-      const pending = this.#pending.get(message.request_id)
-      if (!pending || pending.cancelled) {
-        return
-      }
-      if (message.lease_epoch !== pending.leaseEpoch) {
+      if (message.type === 'rpc_result') {
+        if (!message.ok) {
+          this.#settlePending(message.request_id, { ok: false, code: message.error.code })
+          return
+        }
+        this.#settlePending(message.request_id, this.#mapSuccess(pending.method, message.result))
         return
       }
       this.#settlePending(message.request_id, { ok: false, code: message.reason })
     }
+  }
+
+  #isHolderRpcPeer(peer: PeerState): boolean {
+    const holder = this.#leases.holder
+    if (!holder) {
+      return false
+    }
+    if (peer.phase !== 'complete') {
+      return false
+    }
+    if (!peer.isLeaseHolder) {
+      return false
+    }
+    if (peer.windowInstanceId !== holder.windowInstanceId) {
+      return false
+    }
+    return true
   }
 
   #settlePending(requestId: string, result: GatewayCallResult): void {
@@ -416,14 +429,7 @@ export class PluginGateway {
       return
     }
     const wasHolder = this.#leases.holder?.windowInstanceId === peer.windowInstanceId
-    this.#removePeerRecord(socket, peer)
-    if (peer.windowInstanceId) {
-      try {
-        this.#leases.disconnectWindow(peer.windowInstanceId)
-      } catch {
-        // Ignore unknown windows.
-      }
-    }
+    this.#unregisterPeer(peer)
     socket.destroy()
     if (wasHolder) {
       this.#revokeAllPeersAfterHolderLoss()
@@ -451,15 +457,18 @@ export class PluginGateway {
   #rejectPeer(socket: Socket, reason: string): void {
     const peer = this.#peers.get(socket)
     if (peer) {
-      this.#removePeerRecord(socket, peer)
+      this.#unregisterPeer(peer)
     }
     this.#diagnostic(`rejecting peer: ${reason}`)
     socket.destroy()
   }
 
-  #destroyPeer(socket: Socket, reason: string): void {
-    this.#diagnostic(`destroying peer: ${reason}`)
-    socket.destroy()
+  #unregisterPeer(peer: PeerState): void {
+    const windowInstanceId = peer.windowInstanceId
+    this.#removePeerRecord(peer.socket, peer)
+    if (windowInstanceId) {
+      this.#leases.disconnectWindowIfConnected(windowInstanceId)
+    }
   }
 
   #removePeerRecord(socket: Socket, peer: PeerState): void {

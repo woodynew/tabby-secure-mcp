@@ -111,6 +111,15 @@ describe('LeaseManager', () => {
     expect(leases.epoch).toBe(grant.leaseEpoch)
   })
 
+  it('disconnectWindowIfConnected is idempotent for already disconnected windows', () => {
+    const leases = new LeaseManager()
+    leases.registerWindow({ windowInstanceId: 'main', isMainWindow: true })
+    leases.pairAndGrant('main')
+    leases.disconnectWindowIfConnected('main')
+    leases.disconnectWindowIfConnected('main')
+    expect(leases.getPreferredPairingCandidate()).toBeUndefined()
+  })
+
   it('rejects pending work from a standby or stale epoch', () => {
     const leases = new LeaseManager()
     leases.registerWindow({ windowInstanceId: 'main', isMainWindow: true })
