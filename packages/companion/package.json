@@ -1,0 +1,31 @@
+{
+  "name": "@tabby-secure-mcp/companion",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "bin": {
+    "tabby-secure-mcp": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "esbuild src/cli.ts --bundle --format=esm --platform=node --target=node20 --outfile=dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config ../../vitest.config.mts --root .",
+    "test:integration": "vitest run --config ../../vitest.integration.config.mts --root .",
+    "pack:check": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/server": "2.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@tabby-secure-mcp/ipc-contract": "0.1.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}
