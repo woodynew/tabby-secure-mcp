@@ -27,6 +27,12 @@ export interface AuditFileSystem {
   rename(from: string, to: string): Promise<void>
 }
 
+export interface AuditServiceOptions {
+  logPath?: string
+  fs?: AuditFileSystem
+  platform?: NodeJS.Platform
+}
+
 export class NodeAuditFileSystem implements AuditFileSystem {
   async mkdir(dir: string, options: { recursive: boolean; mode?: number }): Promise<void> {
     await mkdir(dir, options)
@@ -43,21 +49,25 @@ export class NodeAuditFileSystem implements AuditFileSystem {
 
 @Injectable()
 export class AuditService {
-  private readonly logPath: string
-  private readonly fs: AuditFileSystem
-  private readonly platform: NodeJS.Platform
+  private logPath!: string
+  private fs!: AuditFileSystem
+  private platform!: NodeJS.Platform
   private sequence = 0
   private previousHash = AUDIT_GENESIS_HASH
   private writeChain: Promise<void> = Promise.resolve()
   private initPromise?: Promise<void>
 
-  constructor(
-    options: {
-      logPath?: string
-      fs?: AuditFileSystem
-      platform?: NodeJS.Platform
-    } = {},
-  ) {
+  constructor() {
+    this.applyOptions({})
+  }
+
+  static forTests(options: AuditServiceOptions = {}): AuditService {
+    const audit = new AuditService()
+    audit.applyOptions(options)
+    return audit
+  }
+
+  private applyOptions(options: AuditServiceOptions): void {
     this.logPath = options.logPath ?? resolveAuditLogPath()
     this.fs = options.fs ?? new NodeAuditFileSystem()
     this.platform = options.platform ?? process.platform

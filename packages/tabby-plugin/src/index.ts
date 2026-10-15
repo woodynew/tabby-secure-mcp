@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common'
-import { NgModule } from '@angular/core'
+import { Inject, NgModule } from '@angular/core'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
 import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ProfilesService } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
@@ -77,5 +77,5 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
   ],
 })
 export default class TabbySecureMcpPluginModule {
-  constructor(_runtimeLifecycle: PluginRuntimeLifecycle) {}
+  constructor(@Inject(PluginRuntimeLifecycle) _runtimeLifecycle: PluginRuntimeLifecycle) {}
 }

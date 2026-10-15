@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core'
+import { Inject, Injectable } from '@angular/core'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 
 import {
@@ -13,7 +13,7 @@ import { PairingApprovalModalComponent } from './pairing-approval-modal.componen
 
 @Injectable()
 export class NgBootstrapApprovalPresenter implements ApprovalPresenter {
-  constructor(private readonly modalService: NgbModal) {}
+  constructor(@Inject(NgbModal) private readonly modalService: NgbModal) {}
 
   async presentPairing(
     viewModel: PairingApprovalViewModel,

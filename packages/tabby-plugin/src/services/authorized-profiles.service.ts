@@ -1,5 +1,5 @@
-import { Injectable } from '@angular/core'
-import type { ConfigService, PartialProfile, Profile, ProfilesService } from 'tabby-core'
+import { Inject, Injectable } from '@angular/core'
+import { ConfigService, ProfilesService, type PartialProfile, type Profile } from 'tabby-core'
 
 import { readAuthorizedSshProfileIds } from '../config/secure-mcp-config'
 import { TargetUnavailableError } from '../profiles/errors'
@@ -17,8 +17,8 @@ export class AuthorizedProfilesService {
   private readonly idToRef = new Map<string, string>()
 
   constructor(
-    private readonly profilesService: ProfilesService,
-    private readonly config: ConfigService,
+    @Inject(ProfilesService) private readonly profilesService: ProfilesService,
+    @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   async listAuthorizedProfiles(): Promise<AuthorizedProfileView[]> {

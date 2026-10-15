@@ -92,7 +92,7 @@ describe('PluginRuntimeService integration', () => {
       leaseState,
       gatekeeper,
       authorizedProfiles,
-      new AuditService({ logPath: path.join(base, 'audit.jsonl') }),
+      AuditService.forTests({ logPath: path.join(base, 'audit.jsonl') }),
       {
         platform: 'linux',
         descriptorPaths: { descriptorPath },

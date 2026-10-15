@@ -40,7 +40,7 @@ describe('AuditService', () => {
 
   it('appends chained events with serialized concurrent writes', async () => {
     const { fs, lines } = createMemoryFs()
-    const audit = new AuditService({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
+    const audit = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
     await Promise.all([
       audit.append({ event: 'runtime_start', result: 'ok' }),
       audit.append({ event: 'runtime_connect', result: 'ok' }),
@@ -58,7 +58,7 @@ describe('AuditService', () => {
 
   it('redacts sensitive fields from serialized audit lines', async () => {
     const { fs, lines } = createMemoryFs()
-    const audit = new AuditService({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
+    const audit = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
     await audit.append({
       event: 'open_requested',
       result: 'ok',
@@ -81,7 +81,7 @@ describe('AuditService', () => {
         return fs.writeFile(path, data, options)
       },
     }
-    const audit = new AuditService({ logPath: '/tmp/audit.jsonl', fs: failingFs, platform: 'linux' })
+    const audit = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs: failingFs, platform: 'linux' })
     await audit.safeAppend({ event: 'runtime_start', result: 'ok' })
     await audit.safeAppend({ event: 'runtime_connect', result: 'ok' })
     expect(lines).toHaveLength(1)
@@ -90,11 +90,11 @@ describe('AuditService', () => {
 
   it('resumes a valid chain and rotates on corruption', async () => {
     const { fs, lines } = createMemoryFs()
-    const first = new AuditService({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
+    const first = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
     await first.append({ event: 'runtime_start', result: 'ok' })
     lines[0] = lines[0].replace(/"hash":"[a-f0-9]{64}"/, '"hash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"')
 
-    const second = new AuditService({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
+    const second = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
     await second.append({ event: 'runtime_connect', result: 'ok' })
     expect(lines.some((line) => line.startsWith('renamed:'))).toBe(true)
     expect(second.getChainHead().sequence).toBe(1)

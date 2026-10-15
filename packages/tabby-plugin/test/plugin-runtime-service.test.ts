@@ -62,7 +62,7 @@ function createRuntime(options: {
   timers?: { schedule(delayMs: number, callback: () => void): { cancel(): void } }
 }) {
   const leaseState = new RuntimeLeaseState()
-  const audit = new AuditService({ logPath: path.join(tmpdir(), `audit-${Math.random()}.jsonl`) })
+  const audit = AuditService.forTests({ logPath: path.join(tmpdir(), `audit-${Math.random()}.jsonl`) })
   const authorizedProfiles =
     options.authorizedProfiles ??
     ({

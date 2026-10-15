@@ -15,6 +15,8 @@ module.exports = {
             configFile: path.resolve(__dirname, 'tsconfig.json'),
             compilerOptions: {
               noEmit: false,
+              emitDecoratorMetadata: true,
+              importHelpers: true,
             },
           },
         },

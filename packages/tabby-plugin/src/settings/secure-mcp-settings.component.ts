@@ -1,5 +1,5 @@
-import { Component, OnInit } from '@angular/core'
-import type { ConfigService, ProfilesService } from 'tabby-core'
+import { Component, Inject, OnInit } from '@angular/core'
+import { ConfigService, ProfilesService } from 'tabby-core'
 
 import {
   persistAuthorizedSshProfileIds,
@@ -19,8 +19,8 @@ export class SecureMcpSettingsComponent implements OnInit {
   error: string | null = null
 
   constructor(
-    private readonly config: ConfigService,
-    private readonly profiles: ProfilesService,
+    @Inject(ConfigService) private readonly config: ConfigService,
+    @Inject(ProfilesService) private readonly profiles: ProfilesService,
   ) {}
 
   async ngOnInit(): Promise<void> {

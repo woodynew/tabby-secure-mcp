@@ -8,7 +8,7 @@ describe('TabbySecureMcpPluginModule wiring', () => {
   it('injects BOOTSTRAP_DATA into PluginRuntimeService and forces lifecycle construction', () => {
     expect(INDEX_SOURCE).toMatch(/BOOTSTRAP_DATA/)
     expect(INDEX_SOURCE).toMatch(/normalizeWindowBootstrap/)
-    expect(INDEX_SOURCE).toMatch(/constructor\(_runtimeLifecycle: PluginRuntimeLifecycle\)/)
+    expect(INDEX_SOURCE).toMatch(/@Inject\(PluginRuntimeLifecycle\)/)
     expect(INDEX_SOURCE).not.toMatch(/readTabbyBootstrapData/)
     expect(INDEX_SOURCE).not.toMatch(/globalThis/)
   })
