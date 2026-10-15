@@ -87,6 +87,32 @@ describe('AuthorizedProfilesService', () => {
     expect(reauthorized[0]!.profile_ref).toMatch(/^[0-9a-f]{32}$/)
   })
 
+  it('invalidates refs when a new AuthorizedProfilesService instance is created', async () => {
+    const harness = createHarness([sshProfile({ id: 'a', name: 'A' })], ['a'])
+    const [{ profile_ref }] = await harness.service.listAuthorizedProfiles()
+
+    const restarted = new AuthorizedProfilesService(
+      harness.profilesService as never,
+      harness.config as never,
+    )
+    await expect(restarted.resolveAuthorizedProfile(profile_ref)).rejects.toBeInstanceOf(
+      TargetUnavailableError,
+    )
+  })
+
+  it('rejects malformed profile_ref values before lookup', async () => {
+    const harness = createHarness([sshProfile({ id: 'a', name: 'A' })], ['a'])
+    await harness.service.listAuthorizedProfiles()
+
+    await expect(harness.service.resolveAuthorizedProfile('')).rejects.toBeInstanceOf(TargetUnavailableError)
+    await expect(harness.service.resolveAuthorizedProfile('not-a-ref')).rejects.toBeInstanceOf(
+      TargetUnavailableError,
+    )
+    await expect(harness.service.resolveAuthorizedProfile('a'.repeat(31))).rejects.toBeInstanceOf(
+      TargetUnavailableError,
+    )
+  })
+
   it('invalidates refs when a profile is revoked, deleted, or becomes ineligible', async () => {
     const harness = createHarness([sshProfile({ id: 'a', name: 'A' })], ['a'])
     const [{ profile_ref }] = await harness.service.listAuthorizedProfiles()

@@ -10,4 +10,12 @@ describe('profile_ref generation', () => {
     expect(isProfileRef(second)).toBe(true)
     expect(first).not.toBe(second)
   })
+
+  it('rejects malformed profile_ref strings', () => {
+    expect(isProfileRef('')).toBe(false)
+    expect(isProfileRef('abc')).toBe(false)
+    expect(isProfileRef('g'.repeat(32))).toBe(false)
+    expect(isProfileRef(`${'a'.repeat(31)}A`)).toBe(false)
+    expect(isProfileRef(`${'a'.repeat(32)}extra`)).toBe(false)
+  })
 })

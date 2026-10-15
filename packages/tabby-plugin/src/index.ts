@@ -1,6 +1,5 @@
 import { CommonModule } from '@angular/common'
 import { NgModule } from '@angular/core'
-import { FormsModule } from '@angular/forms'
 import { ConfigProvider } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
@@ -10,7 +9,7 @@ import { SecureMcpSettingsComponent } from './settings/secure-mcp-settings.compo
 import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab.provider'
 
 @NgModule({
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule],
   declarations: [SecureMcpSettingsComponent],
   providers: [
     AuthorizedProfilesService,

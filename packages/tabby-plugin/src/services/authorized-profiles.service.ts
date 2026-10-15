@@ -4,7 +4,7 @@ import type { ConfigService, PartialProfile, Profile, ProfilesService } from 'ta
 import { readAuthorizedSshProfileIds } from '../config/secure-mcp-config'
 import { TargetUnavailableError } from '../profiles/errors'
 import { isEligibleSshProfile, readEligibleSshDisplayName } from '../profiles/profile-eligibility'
-import { generateProfileRef } from '../profiles/profile-ref'
+import { generateProfileRef, isProfileRef } from '../profiles/profile-ref'
 
 export interface AuthorizedProfileView {
   profile_ref: string
@@ -40,6 +40,10 @@ export class AuthorizedProfilesService {
   }
 
   async resolveAuthorizedProfile(profileRef: string): Promise<PartialProfile<Profile>> {
+    if (!isProfileRef(profileRef)) {
+      throw new TargetUnavailableError()
+    }
+
     const profileId = this.refToId.get(profileRef)
     if (!profileId) {
       throw new TargetUnavailableError()
