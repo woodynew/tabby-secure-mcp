@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@tabby-secure-mcp/ipc-contract": "0.1.0",
+    "@types/node": "22.15.3",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   }
