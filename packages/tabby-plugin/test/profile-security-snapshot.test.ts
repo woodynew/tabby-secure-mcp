@@ -3,6 +3,7 @@ import type { PartialProfile, Profile } from 'tabby-core'
 
 import {
   buildProfileSecuritySnapshot,
+  ProfileSnapshotError,
   profileSecuritySnapshotsEqual,
 } from '../src/approval/profile-security-snapshot'
 
@@ -71,5 +72,24 @@ describe('profile security snapshot', () => {
     const baseline = buildProfileSecuritySnapshot(sshProfile(), runKey)
     const mutated = buildProfileSecuritySnapshot(sshProfile(overrides), runKey)
     expect(profileSecuritySnapshotsEqual(baseline, mutated)).toBe(false)
+  })
+
+  it('fails closed on cyclic, bigint, function, symbol, and non-finite option values', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+
+    const weirdProfiles = [
+      sshProfile({ options: cyclic }),
+      sshProfile({ options: { ...SECRET, size: BigInt(1) } }),
+      sshProfile({ options: { ...SECRET, cb: () => undefined } }),
+      sshProfile({ options: { ...SECRET, marker: Symbol('x') } }),
+      sshProfile({ options: { ...SECRET, bad: Number.NaN } }),
+    ]
+
+    for (const profile of weirdProfiles) {
+      expect(() => buildProfileSecuritySnapshot(profile, runKey)).toThrow(ProfileSnapshotError)
+      const serialized = JSON.stringify({ version: 1, digest: 'placeholder' })
+      expect(serialized).not.toMatch(/secret-host|secret-user|hunter2/i)
+    }
   })
 })

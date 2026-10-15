@@ -8,8 +8,10 @@ const SRC_ROOT = resolve(import.meta.dirname, '../src')
 function readProductionSources(): string {
   const files = [
     'index.ts',
+    'approval/approval-deadline.ts',
     'approval/approval-gatekeeper.ts',
     'approval/approval-presenter.ts',
+    'approval/approval-scheduler.ts',
     'approval/ng-bootstrap-approval-presenter.ts',
     'approval/profile-security-snapshot.ts',
     'approval/display-sanitizer.ts',

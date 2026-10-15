@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core'
+import { Component, HostListener, Input } from '@angular/core'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
 
 @Component({
@@ -30,6 +30,11 @@ export class PairingApprovalModalComponent {
   @Input() remainingSeconds = 0
 
   constructor(private readonly activeModal: NgbActiveModal) {}
+
+  @HostListener('window:blur')
+  onWindowBlur(): void {
+    this.reject('blur')
+  }
 
   allow(): void {
     this.activeModal.close('allow')

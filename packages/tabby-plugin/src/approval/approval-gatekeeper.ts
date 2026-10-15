@@ -1,16 +1,24 @@
 import { Injectable } from '@angular/core'
 import type { ProfilesService } from 'tabby-core'
 
+import { presentWithApprovalDeadline } from './approval-deadline'
 import { buildOpenApprovalDigest } from './approval-digest'
 import {
-  type ApprovalDecision,
   type ApprovalPresenter,
   buildOpenApprovalViewModel,
   buildPairingApprovalViewModel,
 } from './approval-presenter'
+import type { ApprovalScheduler } from './approval-scheduler'
+import { SystemApprovalScheduler } from './approval-scheduler'
+import {
+  computeEffectiveOpenDeadline,
+  type OpenAuthorizedOperation,
+  validateOpenApprovalRequest,
+} from './open-request-validation'
 import type { MonotonicClock } from './monotonic-clock'
 import {
   buildProfileSecuritySnapshot,
+  ProfileSnapshotError,
   profileSecuritySnapshotsEqual,
   type ProfileSecuritySnapshot,
 } from './profile-security-snapshot'
@@ -25,12 +33,7 @@ export type ApprovalErrorCode =
   | 'not_approved'
   | 'target_unavailable'
 
-export type OpenAuthorizedOperation = {
-  method: 'open_authorized_ssh_profile'
-  params: {
-    profile_ref: string
-  }
-}
+export type { OpenAuthorizedOperation }
 
 export interface OpenApprovalRequest {
   requestId: string
@@ -70,6 +73,7 @@ export class ApprovalGatekeeper {
     private readonly presenter: ApprovalPresenter,
     private readonly clock: MonotonicClock,
     private readonly leaseEpochSource: LeaseEpochSource,
+    private readonly scheduler: ApprovalScheduler = new SystemApprovalScheduler(),
   ) {
     crypto.getRandomValues(this.runKey)
   }
@@ -85,8 +89,12 @@ export class ApprovalGatekeeper {
     const deadlineMonotonicMs = this.clock.now() + APPROVAL_WINDOW_MS
     this.presentationInFlight = true
     try {
-      const decision = await this.presentWithDeadline(
-        context =>
+      const decision = await presentWithApprovalDeadline({
+        clock: this.clock,
+        scheduler: this.scheduler,
+        deadlineMonotonicMs,
+        userSignal: request.signal,
+        present: context =>
           this.presenter.presentPairing(
             buildPairingApprovalViewModel({
               clientIdentity: request.clientIdentity,
@@ -95,9 +103,10 @@ export class ApprovalGatekeeper {
             }),
             context,
           ),
-        deadlineMonotonicMs,
-        request.signal,
-      )
+      })
+      if (request.signal?.aborted) {
+        return { ok: false, code: 'cancelled' }
+      }
       if (decision !== 'allow') {
         return { ok: false, code: 'not_approved' }
       }
@@ -108,13 +117,25 @@ export class ApprovalGatekeeper {
   }
 
   async requestOpen(request: OpenApprovalRequest): Promise<OpenApprovalResult> {
-    if (this.seenRequestIds.has(request.requestId)) {
-      return { ok: false, code: 'not_approved' }
-    }
-    this.rememberRequestId(request.requestId)
-
     if (request.signal?.aborted) {
       return { ok: false, code: 'cancelled' }
+    }
+
+    const validation = validateOpenApprovalRequest({
+      requestId: request.requestId,
+      leaseEpoch: request.leaseEpoch,
+      profileRef: request.profileRef,
+      toolName: request.toolName,
+      operation: request.operation,
+    })
+    if (!validation.ok) {
+      return validation.reason === 'invalid_profile_ref'
+        ? { ok: false, code: 'target_unavailable' }
+        : { ok: false, code: 'not_approved' }
+    }
+
+    if (this.seenRequestIds.has(request.requestId)) {
+      return { ok: false, code: 'not_approved' }
     }
 
     const activeLeaseEpoch = this.leaseEpochSource()
@@ -122,11 +143,9 @@ export class ApprovalGatekeeper {
       return { ok: false, code: 'not_approved' }
     }
 
-    if (this.clock.now() >= request.deadlineMonotonicMs) {
-      return { ok: false, code: 'not_approved' }
-    }
-
-    if (request.operation.params.profile_ref !== request.profileRef) {
+    const receivedAt = this.clock.now()
+    const effectiveDeadline = computeEffectiveOpenDeadline(receivedAt, request.deadlineMonotonicMs)
+    if (receivedAt >= effectiveDeadline) {
       return { ok: false, code: 'not_approved' }
     }
 
@@ -134,9 +153,16 @@ export class ApprovalGatekeeper {
       return { ok: false, code: 'busy' }
     }
 
+    this.rememberRequestId(request.requestId)
+
+    const normalizedRequest: OpenApprovalRequest = {
+      ...request,
+      deadlineMonotonicMs: effectiveDeadline,
+    }
+
     this.presentationInFlight = true
     try {
-      return await this.executeOpenAfterApproval(request)
+      return await this.executeOpenAfterApproval(normalizedRequest)
     } finally {
       this.presentationInFlight = false
     }
@@ -168,8 +194,12 @@ export class ApprovalGatekeeper {
       this.runKey,
     )
 
-    const decision = await this.presentWithDeadline(
-      context =>
+    const decision = await presentWithApprovalDeadline({
+      clock: this.clock,
+      scheduler: this.scheduler,
+      deadlineMonotonicMs: request.deadlineMonotonicMs,
+      userSignal: request.signal,
+      present: context =>
         this.presenter.presentOpen(
           buildOpenApprovalViewModel({
             clientIdentity: request.clientIdentity,
@@ -180,9 +210,7 @@ export class ApprovalGatekeeper {
           }),
           context,
         ),
-      request.deadlineMonotonicMs,
-      request.signal,
-    )
+    })
 
     if (request.signal?.aborted) {
       return { ok: false, code: 'cancelled' }
@@ -220,7 +248,13 @@ export class ApprovalGatekeeper {
       return { ok: false, code: 'target_unavailable' }
     }
 
-    const freshSnapshot = buildProfileSecuritySnapshot(freshProfile, this.runKey)
+    let freshSnapshot: ProfileSecuritySnapshot
+    try {
+      freshSnapshot = buildProfileSecuritySnapshot(freshProfile, this.runKey)
+    } catch {
+      return { ok: false, code: 'target_unavailable' }
+    }
+
     if (!profileSecuritySnapshotsEqual(approvedSnapshot, freshSnapshot)) {
       return { ok: false, code: 'target_unavailable' }
     }
@@ -242,8 +276,15 @@ export class ApprovalGatekeeper {
       return { ok: false, code: 'target_unavailable' }
     }
 
-    await this.profilesService.openNewTabForProfile(freshProfile)
-    return { ok: true, status: 'opened' }
+    try {
+      const opened = await this.profilesService.openNewTabForProfile(freshProfile)
+      if (opened === null) {
+        return { ok: false, code: 'target_unavailable' }
+      }
+      return { ok: true, status: 'opened' }
+    } catch {
+      return { ok: false, code: 'target_unavailable' }
+    }
   }
 
   private rememberRequestId(requestId: string): void {
@@ -258,60 +299,5 @@ export class ApprovalGatekeeper {
         this.seenRequestIds.delete(evicted)
       }
     }
-  }
-
-  private async presentWithDeadline(
-    present: (context: {
-      signal: AbortSignal
-      deadlineMonotonicMs: number
-      remainingSeconds: () => number
-    }) => Promise<ApprovalDecision>,
-    deadlineMonotonicMs: number,
-    userSignal?: AbortSignal,
-  ): Promise<ApprovalDecision> {
-    const controller = new AbortController()
-    const abortFromUser = (): void => {
-      if (userSignal?.aborted) {
-        controller.abort()
-      }
-    }
-    userSignal?.addEventListener('abort', abortFromUser)
-    abortFromUser()
-
-    const context = {
-      signal: controller.signal,
-      deadlineMonotonicMs,
-      remainingSeconds: () => Math.max(0, Math.ceil((deadlineMonotonicMs - this.clock.now()) / 1000)),
-    }
-
-    let decision: ApprovalDecision = 'deny'
-    let presentationFinished = false
-    const presentation = present(context)
-      .then(result => {
-        decision = result
-        presentationFinished = true
-      })
-      .catch(() => {
-        decision = 'deny'
-        presentationFinished = true
-      })
-
-    while (this.clock.now() < deadlineMonotonicMs && !presentationFinished && !controller.signal.aborted) {
-      await Promise.resolve()
-    }
-
-    if (controller.signal.aborted) {
-      decision = 'deny'
-    }
-
-    if (this.clock.now() >= deadlineMonotonicMs) {
-      controller.abort()
-      decision = 'deny'
-    }
-
-    userSignal?.removeEventListener('abort', abortFromUser)
-    await presentation.catch(() => undefined)
-
-    return decision
   }
 }

@@ -7,6 +7,7 @@ import type {
   ApprovalPresenter,
 } from '../src/approval/approval-presenter'
 import { ApprovalGatekeeper, APPROVAL_WINDOW_MS } from '../src/approval/approval-gatekeeper'
+import { FakeApprovalScheduler } from '../src/approval/approval-scheduler'
 import type { MonotonicClock } from '../src/approval/monotonic-clock'
 import { AuthorizedProfilesService } from '../src/services/authorized-profiles.service'
 
@@ -15,6 +16,10 @@ const SECRET_OPTIONS = {
   user: 'secret-user',
   password: 'hunter2',
 }
+
+const REQUEST_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+const REQUEST_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+const REQUEST_C = 'cccccccccccccccccccccccccccccccc'
 
 function sshProfile(overrides: Partial<PartialProfile<Profile>> = {}): PartialProfile<Profile> {
   return {
@@ -28,11 +33,7 @@ function sshProfile(overrides: Partial<PartialProfile<Profile>> = {}): PartialPr
   }
 }
 
-type PresenterOutcome =
-  | ApprovalDecision
-  | 'timeout'
-  | 'exception'
-  | 'blur'
+type PresenterOutcome = ApprovalDecision | 'exception'
 
 class FakeApprovalPresenter implements ApprovalPresenter {
   readonly openCalls: unknown[] = []
@@ -53,19 +54,8 @@ class FakeApprovalPresenter implements ApprovalPresenter {
     return this.resolveOutcome(this.pairingOutcomes)
   }
 
-  async presentOpen(viewModel: unknown, context: ApprovalPresentationContext): Promise<ApprovalDecision> {
+  async presentOpen(viewModel: unknown, _context: ApprovalPresentationContext): Promise<ApprovalDecision> {
     this.openCalls.push(viewModel)
-    if (this.openOutcomes[0] === 'timeout') {
-      await new Promise<void>(resolve => {
-        const onAbort = (): void => resolve()
-        if (context.signal.aborted) {
-          resolve()
-          return
-        }
-        context.signal.addEventListener('abort', onAbort, { once: true })
-      })
-      return 'deny'
-    }
     return this.resolveOutcome(this.openOutcomes)
   }
 
@@ -74,19 +64,12 @@ class FakeApprovalPresenter implements ApprovalPresenter {
     if (next === 'exception') {
       throw new Error('modal failure')
     }
-    if (next === 'timeout' || next === 'blur') {
-      return 'deny'
-    }
     return next ?? 'deny'
   }
 }
 
 class FakeClock implements MonotonicClock {
   private nowMs = 0
-
-  set(ms: number): void {
-    this.nowMs = ms
-  }
 
   advance(ms: number): void {
     this.nowMs += ms
@@ -113,7 +96,7 @@ function createHarness(options: {
   }
   const profilesService = {
     getProfiles: vi.fn(async () => currentProfiles.map(p => ({ ...p, options: { ...p.options } }))),
-    openNewTabForProfile: vi.fn(async () => null),
+    openNewTabForProfile: vi.fn(async () => ({})),
     sendInput: vi.fn(),
     output$: { subscribe: vi.fn() },
     binaryOutput$: { subscribe: vi.fn() },
@@ -121,6 +104,7 @@ function createHarness(options: {
   const authorizedProfiles = new AuthorizedProfilesService(profilesService as never, config as never)
   const presenter = new FakeApprovalPresenter()
   const clock = new FakeClock()
+  const scheduler = new FakeApprovalScheduler(() => clock.now())
   let leaseEpoch = options.leaseEpoch ?? 1
 
   const gatekeeper = new ApprovalGatekeeper(
@@ -129,7 +113,13 @@ function createHarness(options: {
     presenter,
     clock,
     () => leaseEpoch,
+    scheduler,
   )
+
+  const advance = (ms: number): void => {
+    clock.advance(ms)
+    scheduler.flush()
+  }
 
   return {
     gatekeeper,
@@ -137,6 +127,8 @@ function createHarness(options: {
     profilesService,
     presenter,
     clock,
+    scheduler,
+    advance,
     config,
     setProfiles(next: PartialProfile<Profile>[]) {
       currentProfiles = next.map(p => ({ ...p, options: { ...SECRET_OPTIONS, ...(p.options ?? {}) } }))
@@ -161,18 +153,21 @@ function openRequest(
     leaseEpoch: number
     profileRef: string
     signal: AbortSignal
+    deadlineMonotonicMs: number
   }> = {},
 ) {
+  const profileRef = overrides.profileRef ?? ''
   return {
-    requestId: overrides.requestId ?? 'req-1',
+    requestId: overrides.requestId ?? REQUEST_A,
     leaseEpoch: overrides.leaseEpoch ?? 1,
-    profileRef: overrides.profileRef ?? '',
+    profileRef,
     clientIdentity: 'pid:4242 companion',
     toolName: 'open_authorized_ssh_profile',
     operation: {
       method: 'open_authorized_ssh_profile' as const,
-      params: { profile_ref: overrides.profileRef ?? '' },
+      params: { profile_ref: profileRef },
     },
+    deadlineMonotonicMs: overrides.deadlineMonotonicMs ?? harness.clock.now() + APPROVAL_WINDOW_MS,
     signal: overrides.signal,
   }
 }
@@ -181,16 +176,52 @@ describe('ApprovalGatekeeper', () => {
   it('expires open approval at exactly 30 seconds without opening a tab', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
-    harness.presenter.queueOpen('timeout')
-    const deadline = harness.clock.now() + APPROVAL_WINDOW_MS
+    const hungPresenter: ApprovalPresenter = {
+      presentPairing: async () => 'deny',
+      presentOpen: () => new Promise(() => undefined),
+    }
+    const gatekeeper = new ApprovalGatekeeper(
+      harness.authorizedProfiles,
+      harness.profilesService as never,
+      hungPresenter,
+      harness.clock,
+      () => 1,
+      harness.scheduler,
+    )
 
-    const pending = harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { profileRef }),
-      deadlineMonotonicMs: deadline,
-    })
-    harness.clock.advance(APPROVAL_WINDOW_MS)
+    const pending = gatekeeper.requestOpen(openRequest(harness, { profileRef, requestId: REQUEST_A }))
+    harness.advance(APPROVAL_WINDOW_MS)
     const result = await pending
 
+    expect(result).toEqual({ ok: false, code: 'not_approved' })
+    expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
+  })
+
+  it('caps caller deadlines to receivedAt + 30_000ms', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const hungPresenter: ApprovalPresenter = {
+      presentPairing: async () => 'deny',
+      presentOpen: () => new Promise(() => undefined),
+    }
+    const gatekeeper = new ApprovalGatekeeper(
+      harness.authorizedProfiles,
+      harness.profilesService as never,
+      hungPresenter,
+      harness.clock,
+      () => 1,
+      harness.scheduler,
+    )
+
+    const pending = gatekeeper.requestOpen(
+      openRequest(harness, {
+        profileRef,
+        requestId: REQUEST_B,
+        deadlineMonotonicMs: harness.clock.now() + 60_000,
+      }),
+    )
+    harness.advance(APPROVAL_WINDOW_MS)
+    const result = await pending
     expect(result).toEqual({ ok: false, code: 'not_approved' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
   })
@@ -200,31 +231,48 @@ describe('ApprovalGatekeeper', () => {
     const profileRef = await harness.profileRef()
     harness.presenter.queueOpen('allow')
 
-    const deadline = harness.clock.now() + APPROVAL_WINDOW_MS
-    const first = await harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'req-1', profileRef }),
-      deadlineMonotonicMs: deadline,
-    })
+    const first = await harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_A, profileRef }),
+    )
     expect(first).toEqual({ ok: true, status: 'opened' })
     expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(1)
 
     harness.presenter.queueOpen('allow')
-    const replay = await harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'req-1', profileRef }),
-      deadlineMonotonicMs: deadline,
-    })
+    const replay = await harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_A, profileRef }),
+    )
     expect(replay).toEqual({ ok: false, code: 'not_approved' })
     expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(1)
   })
 
-  it('denies on presenter deny, duplicate request_id, invalid lease, and cancellation', async () => {
+  it('allows busy retries with the same request_id before admission', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
-    const deadline = harness.clock.now() + APPROVAL_WINDOW_MS
-    const base = {
-      ...openRequest(harness, { profileRef }),
-      deadlineMonotonicMs: deadline,
-    }
+    harness.presenter.queueOpen('allow')
+
+    const first = harness.gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_A, profileRef }))
+    const busy = await harness.gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_B, profileRef }))
+    expect(busy).toEqual({ ok: false, code: 'busy' })
+
+    const retryWhileBusy = await harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_B, profileRef }),
+    )
+    expect(retryWhileBusy).toEqual({ ok: false, code: 'busy' })
+
+    expect(await first).toEqual({ ok: true, status: 'opened' })
+
+    harness.presenter.queueOpen('allow')
+    const retryAfterAdmission = await harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_B, profileRef }),
+    )
+    expect(retryAfterAdmission).toEqual({ ok: true, status: 'opened' })
+    expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(2)
+  })
+
+  it('denies on presenter deny, duplicate request_id, invalid lease, invalid request id, and cancellation', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const base = openRequest(harness, { profileRef })
 
     harness.presenter.queueOpen('deny')
     expect(await harness.gatekeeper.requestOpen(base)).toEqual({ ok: false, code: 'not_approved' })
@@ -233,43 +281,54 @@ describe('ApprovalGatekeeper', () => {
     expect(
       await harness.gatekeeper.requestOpen({
         ...base,
-        requestId: 'dup',
+        requestId: REQUEST_C,
       }),
     ).toEqual({ ok: true, status: 'opened' })
-    expect(await harness.gatekeeper.requestOpen({ ...base, requestId: 'dup' })).toEqual({
+    expect(await harness.gatekeeper.requestOpen({ ...base, requestId: REQUEST_C })).toEqual({
       ok: false,
       code: 'not_approved',
     })
 
     harness.setLeaseEpoch(2)
     harness.presenter.queueOpen('allow')
-    expect(await harness.gatekeeper.requestOpen({ ...base, requestId: 'bad-lease', leaseEpoch: 1 })).toEqual({
-      ok: false,
-      code: 'not_approved',
-    })
+    expect(
+      await harness.gatekeeper.requestOpen({
+        ...base,
+        requestId: 'dddddddddddddddddddddddddddddddd',
+        leaseEpoch: 1,
+      }),
+    ).toEqual({ ok: false, code: 'not_approved' })
+
+    expect(
+      await harness.gatekeeper.requestOpen({
+        ...base,
+        requestId: 'not-a-valid-request-id',
+      }),
+    ).toEqual({ ok: false, code: 'not_approved' })
 
     const controller = new AbortController()
     controller.abort()
-    expect(await harness.gatekeeper.requestOpen({ ...base, requestId: 'cancelled', signal: controller.signal })).toEqual(
-      { ok: false, code: 'cancelled' },
-    )
+    expect(
+      await harness.gatekeeper.requestOpen({
+        ...base,
+        requestId: 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        signal: controller.signal,
+      }),
+    ).toEqual({ ok: false, code: 'cancelled' })
   })
 
   it('serializes concurrent open requests through the presenter queue', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
-    const deadline = harness.clock.now() + APPROVAL_WINDOW_MS
     harness.presenter.queueOpen('allow')
     harness.presenter.queueOpen('deny')
 
-    const first = harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'one', profileRef }),
-      deadlineMonotonicMs: deadline,
-    })
-    const second = harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'two', profileRef }),
-      deadlineMonotonicMs: deadline,
-    })
+    const first = harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_A, profileRef }),
+    )
+    const second = harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_B, profileRef }),
+    )
 
     const results = await Promise.all([first, second])
     expect(results[0]).toEqual({ ok: true, status: 'opened' })
@@ -302,6 +361,7 @@ describe('ApprovalGatekeeper', () => {
     for (const [index, { mutate }] of mutations.entries()) {
       const local = createHarness()
       const ref = await local.profileRef()
+      const requestId = index.toString(16).padStart(32, '0')
       const deferredPresenter: ApprovalPresenter = {
         presentPairing: async () => 'deny',
         presentOpen: async () => {
@@ -315,11 +375,11 @@ describe('ApprovalGatekeeper', () => {
         deferredPresenter,
         local.clock,
         () => 1,
+        local.scheduler,
       )
 
       const result = await gatekeeper.requestOpen({
-        ...openRequest(local, { requestId: `toctou-${index}`, profileRef: ref }),
-        deadlineMonotonicMs: local.clock.now() + APPROVAL_WINDOW_MS,
+        ...openRequest(local, { requestId, profileRef: ref }),
       })
       expect(result).toEqual({ ok: false, code: 'target_unavailable' })
       expect(local.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
@@ -329,33 +389,63 @@ describe('ApprovalGatekeeper', () => {
   it('binds approval to profile_ref and lease_epoch', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
-    const deadline = harness.clock.now() + APPROVAL_WINDOW_MS
     harness.presenter.queueOpen('allow')
 
     const opened = await harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'bind-1', profileRef, leaseEpoch: 1 }),
-      deadlineMonotonicMs: deadline,
+      ...openRequest(harness, { requestId: REQUEST_A, profileRef, leaseEpoch: 1 }),
     })
     expect(opened).toEqual({ ok: true, status: 'opened' })
 
     harness.presenter.queueOpen('allow')
     const wrongRef = await harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'bind-2', profileRef: '00000000000000000000000000000000', leaseEpoch: 1 }),
-      deadlineMonotonicMs: deadline,
+      ...openRequest(harness, {
+        requestId: REQUEST_B,
+        profileRef: '00000000000000000000000000000000',
+        leaseEpoch: 1,
+      }),
     })
     expect(wrongRef).toEqual({ ok: false, code: 'target_unavailable' })
+  })
+
+  it('returns target_unavailable when openNewTabForProfile returns null or throws', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    harness.presenter.queueOpen('allow')
+    harness.profilesService.openNewTabForProfile.mockResolvedValueOnce(null)
+    expect(
+      await harness.gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_A, profileRef })),
+    ).toEqual({ ok: false, code: 'target_unavailable' })
+
+    harness.presenter.queueOpen('allow')
+    harness.profilesService.openNewTabForProfile.mockRejectedValueOnce(new Error('tab failed'))
+    expect(
+      await harness.gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_B, profileRef })),
+    ).toEqual({ ok: false, code: 'target_unavailable' })
+    expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns target_unavailable when profile snapshot canonicalization fails', async () => {
+    const cyclic: Record<string, unknown> = { ...SECRET_OPTIONS }
+    cyclic.loop = cyclic
+    const harness = createHarness({ profiles: [sshProfile({ options: cyclic })] })
+    const profileRef = await harness.profileRef()
+    harness.presenter.queueOpen('allow')
+
+    const result = await harness.gatekeeper.requestOpen(
+      openRequest(harness, { requestId: REQUEST_A, profileRef }),
+    )
+    expect(result).toEqual({ ok: false, code: 'target_unavailable' })
+    expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
   })
 
   it('denies when the presenter throws and on AbortSignal while a modal is active', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
-    const deadline = harness.clock.now() + APPROVAL_WINDOW_MS
 
     harness.presenter.queueOpen('exception')
     expect(
       await harness.gatekeeper.requestOpen({
-        ...openRequest(harness, { requestId: 'modal-ex', profileRef }),
-        deadlineMonotonicMs: deadline,
+        ...openRequest(harness, { requestId: REQUEST_C, profileRef }),
       }),
     ).toEqual({ ok: false, code: 'not_approved' })
 
@@ -378,10 +468,14 @@ describe('ApprovalGatekeeper', () => {
       abortPresenter,
       harness.clock,
       () => 1,
+      harness.scheduler,
     )
     const pending = gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'abort-mid', profileRef, signal: controller.signal }),
-      deadlineMonotonicMs: deadline,
+      ...openRequest(harness, {
+        requestId: 'ffffffffffffffffffffffffffffffff',
+        profileRef,
+        signal: controller.signal,
+      }),
     })
     controller.abort()
     expect(await pending).toEqual({ ok: false, code: 'cancelled' })
@@ -406,14 +500,36 @@ describe('ApprovalGatekeeper', () => {
     })
   })
 
+  it('expires pairing approval at exactly 30 seconds', async () => {
+    const harness = createHarness()
+    const hungPresenter: ApprovalPresenter = {
+      presentPairing: () => new Promise(() => undefined),
+      presentOpen: async () => 'deny',
+    }
+    const gatekeeper = new ApprovalGatekeeper(
+      harness.authorizedProfiles,
+      harness.profilesService as never,
+      hungPresenter,
+      harness.clock,
+      () => 1,
+      harness.scheduler,
+    )
+
+    const pending = gatekeeper.requestPairingApproval({
+      clientIdentity: 'local companion',
+      companionLabel: 'pid:99123',
+    })
+    harness.advance(APPROVAL_WINDOW_MS)
+    expect(await pending).toEqual({ ok: false, code: 'not_approved' })
+  })
+
   it('passes sanitized structured operation details to the open presenter', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
     harness.presenter.queueOpen('deny')
 
     await harness.gatekeeper.requestOpen({
-      ...openRequest(harness, { requestId: 'sanitize', profileRef }),
-      deadlineMonotonicMs: harness.clock.now() + APPROVAL_WINDOW_MS,
+      ...openRequest(harness, { requestId: REQUEST_C, profileRef }),
     })
 
     const vm = harness.presenter.openCalls[0] as {
