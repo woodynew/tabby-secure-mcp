@@ -1,6 +1,8 @@
 {
   "name": "@tabby-secure-mcp/companion",
   "version": "0.1.0",
+  "description": "stdio MCP companion for tabby-secure-mcp",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=20.19.0"

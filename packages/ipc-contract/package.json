@@ -1,6 +1,8 @@
 {
   "name": "@tabby-secure-mcp/ipc-contract",
   "version": "0.1.0",
+  "description": "Shared IPC contract for tabby-secure-mcp",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
