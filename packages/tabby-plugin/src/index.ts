@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common'
 import { NgModule } from '@angular/core'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
-import { ConfigProvider, ProfilesService } from 'tabby-core'
+import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ProfilesService } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
 import { AuditService } from './audit/audit-service'
@@ -11,7 +11,7 @@ import { NgBootstrapApprovalPresenter } from './approval/ng-bootstrap-approval-p
 import { OpenApprovalModalComponent } from './approval/open-approval-modal.component'
 import { PairingApprovalModalComponent } from './approval/pairing-approval-modal.component'
 import { SecureMcpConfigProvider } from './config/secure-mcp-config-provider'
-import { readTabbyBootstrapData } from './runtime/bootstrap-data'
+import { normalizeWindowBootstrap } from './runtime/bootstrap-data'
 import { PluginRuntimeLifecycle } from './runtime/plugin-runtime-lifecycle'
 import { PluginRuntimeService } from './runtime/plugin-runtime-service'
 import { RuntimeLeaseState } from './runtime/runtime-lease-state'
@@ -56,23 +56,26 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
     {
       provide: PluginRuntimeService,
       useFactory: (
+        bootstrapData: BootstrapData,
         leaseState: RuntimeLeaseState,
         gatekeeper: ApprovalGatekeeper,
         authorizedProfiles: AuthorizedProfilesService,
         audit: AuditService,
       ) =>
         new PluginRuntimeService(
-          readTabbyBootstrapData,
+          () => normalizeWindowBootstrap(bootstrapData),
           leaseState,
           gatekeeper,
           authorizedProfiles,
           audit,
         ),
-      deps: [RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService],
+      deps: [BOOTSTRAP_DATA, RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService],
     },
     PluginRuntimeLifecycle,
     { provide: ConfigProvider, useClass: SecureMcpConfigProvider, multi: true },
     { provide: SettingsTabProvider, useClass: SecureMcpSettingsTabProvider, multi: true },
   ],
 })
-export default class TabbySecureMcpPluginModule {}
+export default class TabbySecureMcpPluginModule {
+  constructor(_runtimeLifecycle: PluginRuntimeLifecycle) {}
+}

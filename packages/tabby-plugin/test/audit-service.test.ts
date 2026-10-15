@@ -68,6 +68,26 @@ describe('AuditService', () => {
     expect(serialized).not.toMatch(/password|hunter2|secret-host|profile_ref|nonce|endpoint|\\\\\.\\pipe/i)
   })
 
+  it('recovers the write queue after an append failure', async () => {
+    let failNext = true
+    const { fs, lines } = createMemoryFs()
+    const failingFs: AuditFileSystem = {
+      ...fs,
+      async writeFile(path, data, options) {
+        if (failNext && options.flag === 'a') {
+          failNext = false
+          throw new Error('disk full')
+        }
+        return fs.writeFile(path, data, options)
+      },
+    }
+    const audit = new AuditService({ logPath: '/tmp/audit.jsonl', fs: failingFs, platform: 'linux' })
+    await audit.safeAppend({ event: 'runtime_start', result: 'ok' })
+    await audit.safeAppend({ event: 'runtime_connect', result: 'ok' })
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('runtime_connect')
+  })
+
   it('resumes a valid chain and rotates on corruption', async () => {
     const { fs, lines } = createMemoryFs()
     const first = new AuditService({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })

@@ -1,4 +1,6 @@
 import type { DescriptorFileSystem } from './descriptor-reader'
+import type { ProcessLivenessProbe } from './process-liveness'
+import type { RuntimeDiagnosticCode } from './runtime-diagnostics'
 
 export interface PluginSocket {
   destroyed?: boolean
@@ -38,5 +40,6 @@ export interface PluginRuntimeDependencies {
   timers?: RuntimeTimerScheduler
   random?: RandomBytesProvider
   reconnectDelayMs?: number
-  onDiagnostic?: (message: string) => void
+  isProcessAlive?: ProcessLivenessProbe
+  onDiagnostic?: (code: RuntimeDiagnosticCode) => void
 }

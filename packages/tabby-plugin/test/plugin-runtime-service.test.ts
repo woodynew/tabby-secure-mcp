@@ -81,7 +81,7 @@ function createRuntime(options: {
     )
 
   const runtime = new PluginRuntimeService(
-    () => ({ isMainWindow: options.isMainWindow ?? true, windowID: 'win-1' }),
+    () => ({ isMainWindow: options.isMainWindow ?? true, windowId: '1' }),
     leaseState,
     gatekeeper,
     authorizedProfiles,
@@ -97,6 +97,7 @@ function createRuntime(options: {
         },
       },
       reconnectDelayMs: 5,
+      isProcessAlive: () => true,
       random: {
         randomBytes: (size) => Buffer.alloc(size, 3),
         randomId: () => 'window-instance-1',

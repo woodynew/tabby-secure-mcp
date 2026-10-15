@@ -88,7 +88,7 @@ describe('PluginRuntimeService integration', () => {
     )
 
     const runtime = new PluginRuntimeService(
-      () => ({ isMainWindow: true, windowID: 'main' }),
+      () => ({ isMainWindow: true, windowId: '1' }),
       leaseState,
       gatekeeper,
       authorizedProfiles,
@@ -97,6 +97,7 @@ describe('PluginRuntimeService integration', () => {
         platform: 'linux',
         descriptorPaths: { descriptorPath },
         reconnectDelayMs: 20,
+        isProcessAlive: () => true,
         random: {
           randomBytes: (size) => Buffer.alloc(size, 5),
           randomId: () => 'integration-window',

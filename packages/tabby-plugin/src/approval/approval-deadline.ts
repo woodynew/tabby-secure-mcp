@@ -78,7 +78,9 @@ export async function presentWithApprovalDeadline(input: {
     raceOutcome === 'presenter' &&
     presenterSettled &&
     presenterDecision === 'allow' &&
-    input.clock.now() < input.deadlineMonotonicMs
+    input.clock.now() < input.deadlineMonotonicMs &&
+    !controller.signal.aborted &&
+    !input.userSignal?.aborted
 
   gateClosed = true
   controller.abort()

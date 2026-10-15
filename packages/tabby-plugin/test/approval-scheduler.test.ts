@@ -63,6 +63,28 @@ describe('presentWithApprovalDeadline', () => {
     await Promise.resolve()
   })
 
+  it('does not approve when user aborts before presenter resolves allow', async () => {
+    const clock = new FakeClock()
+    const scheduler = new FakeApprovalScheduler(() => clock.now())
+    const user = new AbortController()
+    const deadline = clock.now() + 30_000
+
+    const pending = presentWithApprovalDeadline({
+      clock,
+      scheduler,
+      deadlineMonotonicMs: deadline,
+      userSignal: user.signal,
+      present: () =>
+        new Promise<'allow' | 'deny'>(resolve => {
+          user.abort()
+          queueMicrotask(() => resolve('allow'))
+        }),
+    })
+
+    const decision = await pending
+    expect(decision).toBe('deny')
+  })
+
   it('approves only when the presenter allows before the deadline', async () => {
     const clock = new FakeClock()
     const scheduler = new FakeApprovalScheduler(() => clock.now())

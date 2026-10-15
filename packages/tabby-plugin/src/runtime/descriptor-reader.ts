@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 
 import { MAX_DESCRIPTOR_BYTES, parseRuntimeDescriptor, type RuntimeDescriptor } from './descriptor'
 import { isAllowedIpcEndpoint } from './endpoint-policy'
+import { defaultProcessLivenessProbe, type ProcessLivenessProbe } from './process-liveness'
 
 export type DescriptorReadErrorCode =
   | 'missing'
@@ -11,6 +12,7 @@ export type DescriptorReadErrorCode =
   | 'invalid'
   | 'expired'
   | 'endpoint_forbidden'
+  | 'stale_pid'
 
 export type DescriptorReadResult =
   | { ok: true; descriptor: RuntimeDescriptor }
@@ -29,10 +31,15 @@ export interface DescriptorFileSystem {
 export async function readRuntimeDescriptor(
   descriptorPath: string,
   fs: DescriptorFileSystem,
-  options: { nowMs?: number; platform?: NodeJS.Platform } = {},
+  options: {
+    nowMs?: number
+    platform?: NodeJS.Platform
+    isProcessAlive?: ProcessLivenessProbe
+  } = {},
 ): Promise<DescriptorReadResult> {
   const platform = options.platform ?? process.platform
   const nowMs = options.nowMs ?? Date.now()
+  const isProcessAlive = options.isProcessAlive ?? defaultProcessLivenessProbe
 
   let stat: DescriptorFileStat
   try {
@@ -77,6 +84,10 @@ export async function readRuntimeDescriptor(
 
   if (!isAllowedIpcEndpoint(descriptor.endpoint, platform)) {
     return { ok: false, code: 'endpoint_forbidden' }
+  }
+
+  if (!isProcessAlive(descriptor.pid)) {
+    return { ok: false, code: 'stale_pid' }
   }
 
   return { ok: true, descriptor }

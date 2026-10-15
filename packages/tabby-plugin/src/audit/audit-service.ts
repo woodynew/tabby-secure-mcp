@@ -49,7 +49,7 @@ export class AuditService {
   private sequence = 0
   private previousHash = AUDIT_GENESIS_HASH
   private writeChain: Promise<void> = Promise.resolve()
-  private initialized = false
+  private initPromise?: Promise<void>
 
   constructor(
     options: {
@@ -65,20 +65,28 @@ export class AuditService {
 
   async append(input: AuditEventInput): Promise<void> {
     await this.ensureInitialized()
-    this.writeChain = this.writeChain.then(() => this.appendLine(input))
-    await this.writeChain
+    const task = this.writeChain.then(() => this.appendLine(input))
+    this.writeChain = task.catch(() => undefined)
+    await task
+  }
+
+  async safeAppend(input: AuditEventInput): Promise<void> {
+    try {
+      await this.append(input)
+    } catch {
+      this.writeChain = Promise.resolve()
+    }
   }
 
   getChainHead(): { sequence: number; previousHash: string } {
     return { sequence: this.sequence, previousHash: this.previousHash }
   }
 
-  private async ensureInitialized(): Promise<void> {
-    if (this.initialized) {
-      return
+  private ensureInitialized(): Promise<void> {
+    if (!this.initPromise) {
+      this.initPromise = this.initializeChain()
     }
-    await this.initializeChain()
-    this.initialized = true
+    return this.initPromise
   }
 
   private async initializeChain(): Promise<void> {

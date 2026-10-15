@@ -67,6 +67,21 @@ describe('readRuntimeDescriptor', () => {
     ).resolves.toMatchObject({ ok: false, code: 'endpoint_forbidden' })
   })
 
+  it('rejects descriptors whose PID is not alive', async () => {
+    const body = JSON.stringify({
+      protocol_version: 1,
+      endpoint,
+      pid: 999_999,
+      expires_at: Date.now() + 60_000,
+      pairing_nonce: VALID_NONCE,
+    })
+    const result = await readRuntimeDescriptor('/d.json', fsWith(body), {
+      platform: 'linux',
+      isProcessAlive: () => false,
+    })
+    expect(result).toMatchObject({ ok: false, code: 'stale_pid' })
+  })
+
   it('accepts a valid unix descriptor', async () => {
     const body = JSON.stringify({
       protocol_version: 1,
@@ -75,7 +90,10 @@ describe('readRuntimeDescriptor', () => {
       expires_at: Date.now() + 60_000,
       pairing_nonce: VALID_NONCE,
     })
-    const result = await readRuntimeDescriptor('/d.json', fsWith(body), { platform: 'linux' })
+    const result = await readRuntimeDescriptor('/d.json', fsWith(body), {
+      platform: 'linux',
+      isProcessAlive: () => true,
+    })
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.descriptor.endpoint).toBe(endpoint)

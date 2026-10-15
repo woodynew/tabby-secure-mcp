@@ -1,15 +1,24 @@
-export interface BootstrapData {
+import type { BootstrapData } from 'tabby-core'
+
+export interface NormalizedWindowBootstrap {
   isMainWindow: boolean
-  windowID: string
+  windowId: string
 }
 
-export type BootstrapDataSource = () => BootstrapData
+export type WindowBootstrapSource = () => NormalizedWindowBootstrap
 
-export function readTabbyBootstrapData(): BootstrapData {
-  const globalScope = globalThis as { BOOTSTRAP_DATA?: BootstrapData }
-  const data = globalScope.BOOTSTRAP_DATA
-  if (!data || typeof data.isMainWindow !== 'boolean' || typeof data.windowID !== 'string') {
-    return { isMainWindow: true, windowID: 'unknown-window' }
+export function normalizeWindowBootstrap(
+  data: BootstrapData | null | undefined,
+): NormalizedWindowBootstrap {
+  if (!data || typeof data.isMainWindow !== 'boolean') {
+    return { isMainWindow: false, windowId: '0' }
   }
-  return data
+  const rawId = data.windowID
+  if (typeof rawId !== 'number' || !Number.isFinite(rawId)) {
+    return { isMainWindow: false, windowId: '0' }
+  }
+  return {
+    isMainWindow: data.isMainWindow === true,
+    windowId: String(Math.trunc(rawId)),
+  }
 }
