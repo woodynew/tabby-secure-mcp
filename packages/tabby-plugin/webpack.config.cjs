@@ -26,6 +26,13 @@ module.exports = {
   },
   externalsType: 'commonjs',
   externals: [
+    ({ request }, callback) => {
+      if (typeof request === 'string' && request.startsWith('node:')) {
+        callback(null, `commonjs ${request.slice('node:'.length)}`)
+        return
+      }
+      callback()
+    },
     /^@angular\/(?!common\/locales(?:\/|$))/,
     /^@ng-bootstrap(?:\/|$)/,
     /^rxjs(?:\/|$)/,

@@ -3,6 +3,7 @@ import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { assertTabbyPluginDiscoveryManifest } from './pack-check-core.mjs'
 import { packWorkspacePackage, runCommand } from './npm-pack-utils.mjs'
 
 export const EXPECTED_VERSION = '0.1.0'
@@ -398,6 +399,7 @@ export async function verifyInstalledLayout(pluginsDir, deps = {}) {
   if (pluginPkg.name !== PLUGIN_PACKAGE_NAME || pluginPkg.version !== EXPECTED_VERSION) {
     throw new Error('installed plugin package name or version mismatch')
   }
+  assertTabbyPluginDiscoveryManifest(pluginPkg, 'installed plugin')
   if (companionPkg.name !== COMPANION_PACKAGE_NAME || companionPkg.version !== EXPECTED_VERSION) {
     throw new Error('installed companion package name or version mismatch')
   }

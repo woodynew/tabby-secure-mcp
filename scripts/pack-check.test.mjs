@@ -8,10 +8,13 @@ import { describe, expect, it } from 'vitest'
 
 import {
   EXPECTED_VERSION,
+  TABBY_PLUGIN_KEYWORD,
   assertPackManifest,
+  assertTabbyPluginDiscoveryManifest,
   inspectPackedTarball,
   listPackageJsonFromTarball,
   listTarballEntries,
+  resolveTabbyPluginAuthor,
 } from './pack-check-core.mjs'
 
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -26,6 +29,34 @@ describe('listTarballEntries', () => {
     })
     const entries = await listTarballEntries(tarball)
     expect(entries.sort()).toEqual(['dist/index.js', 'package.json'])
+  })
+})
+
+describe('assertTabbyPluginDiscoveryManifest', () => {
+  it('rejects manifests Tabby parsePluginInfo would throw on', () => {
+    expect(() =>
+      assertTabbyPluginDiscoveryManifest({
+        keywords: [TABBY_PLUGIN_KEYWORD],
+        main: 'dist/index.js',
+      }),
+    ).toThrow(/author/i)
+    expect(() =>
+      resolveTabbyPluginAuthor({ author: undefined }),
+    ).toThrow(/author/i)
+  })
+
+  it('accepts string or object author like Tabby', () => {
+    expect(
+      resolveTabbyPluginAuthor({ author: 'Tabby Developers' }),
+    ).toBe('Tabby Developers')
+    expect(
+      resolveTabbyPluginAuthor({ author: { name: 'Example', email: 'a@b.c' } }),
+    ).toBe('Example')
+    assertTabbyPluginDiscoveryManifest({
+      keywords: [TABBY_PLUGIN_KEYWORD],
+      main: 'dist/index.js',
+      author: 'tabby-secure-mcp',
+    })
   })
 })
 

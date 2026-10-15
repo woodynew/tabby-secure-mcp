@@ -340,7 +340,13 @@ describe('verifyInstalledLayout', () => {
     await mkdir(path.join(companionRoot, 'dist'), { recursive: true })
     await writeFile(
       path.join(pluginRoot, 'package.json'),
-      JSON.stringify({ name: PLUGIN_PACKAGE_NAME, version: EXPECTED_VERSION }),
+      JSON.stringify({
+        name: PLUGIN_PACKAGE_NAME,
+        version: EXPECTED_VERSION,
+        keywords: ['tabby-plugin'],
+        main: 'dist/index.js',
+        author: 'tabby-secure-mcp',
+      }),
     )
     await writeFile(
       path.join(companionRoot, 'package.json'),

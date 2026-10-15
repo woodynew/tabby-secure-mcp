@@ -9,6 +9,27 @@ import { packWorkspacePackage } from './npm-pack-utils.mjs'
 export const EXPECTED_VERSION = '0.1.0'
 export const PLUGIN_PACKAGE_NAME = 'tabby-secure-mcp'
 export const COMPANION_PACKAGE_NAME = '@tabby-secure-mcp/companion'
+export const TABBY_PLUGIN_KEYWORD = 'tabby-plugin'
+
+/** Mirrors Tabby plugins_11.ts parsePluginInfo author normalization. */
+export function resolveTabbyPluginAuthor(manifest) {
+  let author = manifest.author
+  if (author === undefined || author === null) {
+    throw new Error('plugin package.json must declare author for Tabby discovery')
+  }
+  return author.name || author
+}
+
+export function assertTabbyPluginDiscoveryManifest(manifest, label = 'plugin') {
+  const keywords = manifest.keywords
+  if (!Array.isArray(keywords) || !keywords.includes(TABBY_PLUGIN_KEYWORD)) {
+    throw new Error(`${label} package.json keywords must include ${TABBY_PLUGIN_KEYWORD}`)
+  }
+  resolveTabbyPluginAuthor(manifest)
+  if (typeof manifest.main !== 'string' || manifest.main.length === 0) {
+    throw new Error(`${label} package.json must declare main entry`)
+  }
+}
 
 async function readEntireStream(stream) {
   const chunks = []
@@ -162,6 +183,7 @@ export async function inspectPackedTarball(options = {}) {
     const pluginManifest = await listPackageJsonFromTarball(pluginPath)
     const companionManifest = await listPackageJsonFromTarball(companionPath)
     assertPackManifest(pluginManifest, 'plugin')
+    assertTabbyPluginDiscoveryManifest(pluginManifest, 'plugin')
     assertPackManifest(companionManifest, 'companion')
     if (pluginManifest.name !== PLUGIN_PACKAGE_NAME) {
       throw new Error('plugin tarball name mismatch')
@@ -192,6 +214,9 @@ export async function inspectPackedTarball(options = {}) {
 
     if (!result.plugin.bundle.match(/webpackUniversalModuleDefinition|module\.exports/)) {
       throw new Error('plugin bundle is missing a UMD export signature')
+    }
+    if (/require\(["']node:/.test(result.plugin.bundle)) {
+      throw new Error('plugin bundle must not require node: protocol builtins (Tabby host uses unprefixed requires)')
     }
     if (!result.companion.shebang.startsWith('#!/usr/bin/env node')) {
       throw new Error('companion CLI is missing a Node shebang')

@@ -14,7 +14,7 @@ function isExternal(request: string): boolean {
       ? [config.externals]
       : []
 
-  return externals.some(pattern => pattern.test(request))
+  return externals.some(entry => typeof entry !== 'function' && entry.test(request))
 }
 
 describe('Tabby plugin webpack host dependencies', () => {
@@ -41,5 +41,23 @@ describe('Tabby plugin webpack host dependencies', () => {
 
   it('loads externals from the Electron host through CommonJS', () => {
     expect(config.externalsType).toBe('commonjs')
+  })
+
+  it('maps node: builtins to unprefixed CommonJS requires for Tabby', () => {
+    const externals = Array.isArray(config.externals)
+      ? config.externals
+      : config.externals
+        ? [config.externals]
+        : []
+    const nodeMapper = externals.find(
+      (entry): entry is (data: { request?: string }, callback: (error?: Error | null, result?: string) => void) => void =>
+        typeof entry === 'function',
+    )
+    expect(nodeMapper).toBeDefined()
+    let mapped: string | undefined
+    nodeMapper?.({ request: 'node:buffer' }, (_error, result) => {
+      mapped = result
+    })
+    expect(mapped).toBe('commonjs buffer')
   })
 })

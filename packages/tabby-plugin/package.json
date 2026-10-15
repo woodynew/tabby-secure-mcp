@@ -2,6 +2,7 @@
   "name": "tabby-secure-mcp",
   "version": "0.1.0",
   "description": "Tabby plugin for secure MCP SSH profile access with in-app approval",
+  "author": "tabby-secure-mcp contributors",
   "license": "MIT",
   "main": "dist/index.js",
   "engines": {
