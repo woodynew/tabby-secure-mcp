@@ -17,7 +17,7 @@ import { verifyPairingResponse, type PairingTranscript } from '../runtime/pairin
 import { ConcurrencyLimiter } from './concurrency.js'
 import { TokenBucket } from './token-bucket.js'
 
-const HANDSHAKE_TIMEOUT_MS = 5_000
+export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000
 export const DEFAULT_RPC_DEADLINE_MS = 30_000
 
 export type GatewayCallResult =
@@ -34,19 +34,24 @@ export interface PluginGatewayOptions {
   pid: number
   pairingNonce: string
   protocolVersion?: number
+  handshakeTimeoutMs?: number
   onDiagnostic?: (message: string) => void
 }
+
+type HandshakePhase = 'awaiting_hello' | 'awaiting_decision' | 'complete'
 
 interface PeerState {
   socket: Socket
   decoder: IpcFrameDecoder
   outboundSeq: number
+  phase: HandshakePhase
   windowInstanceId?: string
   isMainWindow: boolean
   pluginChallenge?: string
   companionChallenge?: string
   handshakeTimer?: NodeJS.Timeout
-  handshaken: boolean
+  authenticated: boolean
+  isLeaseHolder: boolean
 }
 
 interface PendingCall {
@@ -56,8 +61,9 @@ interface PendingCall {
   cancelled: boolean
   deadlineTimer: NodeJS.Timeout
   releaseConcurrency: () => void
-  resolve: (result: GatewayCallResult) => void
+  complete: (result: GatewayCallResult) => void
   onAbort?: () => void
+  signal?: AbortSignal
 }
 
 export class PluginGateway {
@@ -68,9 +74,12 @@ export class PluginGateway {
   readonly #pending = new Map<string, PendingCall>()
   readonly #limiter = new ConcurrencyLimiter(4)
   readonly #bucket = new TokenBucket({ capacity: 5, perMinute: 20 })
+  readonly #handshakeTimeoutMs: number
   #closed = false
+  #tearingDown = false
 
   constructor(private readonly options: PluginGatewayOptions) {
+    this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS
     this.#server = createServer((socket) => {
       this.#accept(socket)
     })
@@ -95,21 +104,12 @@ export class PluginGateway {
       return
     }
     this.#closed = true
-    for (const peer of this.#peers.values()) {
-      if (peer.handshakeTimer) {
-        clearTimeout(peer.handshakeTimer)
-      }
-      peer.socket.destroy()
-    }
-    this.#peers.clear()
-    this.#windowToSocket.clear()
+    this.#dropAllPeers()
     await new Promise<void>((resolve) => {
       this.#server.close(() => resolve())
     })
     for (const pending of this.#pending.values()) {
-      clearTimeout(pending.deadlineTimer)
-      pending.releaseConcurrency()
-      pending.resolve({ ok: false, code: 'cancelled' })
+      pending.complete({ ok: false, code: 'cancelled' })
     }
     this.#pending.clear()
   }
@@ -136,7 +136,7 @@ export class PluginGateway {
 
     const socket = this.#windowToSocket.get(holder.windowInstanceId)
     const peer = socket ? this.#peers.get(socket) : undefined
-    if (!peer?.handshaken || peer.windowInstanceId !== holder.windowInstanceId) {
+    if (!peer?.isLeaseHolder || peer.windowInstanceId !== holder.windowInstanceId) {
       releaseConcurrency()
       return { ok: false, code: 'plugin_unavailable' }
     }
@@ -152,17 +152,11 @@ export class PluginGateway {
     return await new Promise<GatewayCallResult>((resolve) => {
       let dispatched = false
 
-      const settle = (result: GatewayCallResult) => {
+      const complete = (result: GatewayCallResult) => {
         const pending = this.#pending.get(requestId)
-        if (!pending) {
-          return
+        if (pending) {
+          this.#finishPending(pending, result)
         }
-        this.#pending.delete(requestId)
-        clearTimeout(pending.deadlineTimer)
-        if (pending.onAbort) {
-          callOptions.signal?.removeEventListener('abort', pending.onAbort)
-        }
-        pending.releaseConcurrency()
         resolve(result)
       }
 
@@ -187,7 +181,7 @@ export class PluginGateway {
         }
         pending.cancelled = true
         sendCancel()
-        settle({ ok: false, code })
+        complete({ ok: false, code })
       }
 
       const onAbort = () => cancel('cancelled')
@@ -202,8 +196,9 @@ export class PluginGateway {
         cancelled: false,
         deadlineTimer,
         releaseConcurrency,
-        resolve: settle,
+        complete,
         onAbort,
+        signal: callOptions.signal,
       }
       this.#pending.set(requestId, pending)
 
@@ -236,23 +231,28 @@ export class PluginGateway {
       socket,
       decoder: new IpcFrameDecoder(),
       outboundSeq: 0,
+      phase: 'awaiting_hello',
       isMainWindow: false,
-      handshaken: false,
+      authenticated: false,
+      isLeaseHolder: false,
     }
     this.#peers.set(socket, peer)
     peer.handshakeTimer = setTimeout(() => {
-      socket.destroy()
-    }, HANDSHAKE_TIMEOUT_MS)
+      this.#rejectPeer(socket, 'handshake timeout')
+    }, this.#handshakeTimeoutMs)
 
     socket.on('data', (chunk) => {
       try {
         const messages = peer.decoder.push(chunk)
         for (const message of messages) {
-          void this.#handleMessage(peer, message)
+          void this.#handleMessage(peer, message).catch((error) => {
+            this.#diagnostic(`peer handler error: ${(error as Error).message}`)
+            this.#rejectPeer(socket, 'handler error')
+          })
         }
       } catch (error) {
         this.#diagnostic(`peer frame error: ${(error as Error).message}`)
-        socket.destroy()
+        this.#rejectPeer(socket, 'frame error')
       }
     })
     socket.on('close', () => this.#dropPeer(socket))
@@ -261,6 +261,15 @@ export class PluginGateway {
 
   async #handleMessage(peer: PeerState, message: IpcMessage): Promise<void> {
     if (message.type === 'plugin_hello') {
+      if (peer.phase !== 'awaiting_hello') {
+        this.#rejectPeer(peer.socket, 'unexpected plugin_hello')
+        return
+      }
+      if (this.#windowToSocket.has(message.window_instance_id)) {
+        this.#rejectPeer(peer.socket, 'duplicate window_instance_id')
+        return
+      }
+      peer.phase = 'awaiting_decision'
       peer.windowInstanceId = message.window_instance_id
       peer.isMainWindow = message.is_main_window
       peer.pluginChallenge = message.plugin_challenge
@@ -280,15 +289,25 @@ export class PluginGateway {
     }
 
     if (message.type === 'pairing_decision') {
-      if (!peer.windowInstanceId || !peer.companionChallenge || !peer.pluginChallenge) {
-        peer.socket.destroy()
+      if (peer.phase !== 'awaiting_decision') {
+        this.#rejectPeer(peer.socket, 'unexpected pairing_decision')
         return
       }
+      if (
+        !peer.windowInstanceId ||
+        !peer.companionChallenge ||
+        !peer.pluginChallenge ||
+        message.window_instance_id !== peer.windowInstanceId
+      ) {
+        this.#rejectPeer(peer.socket, 'pairing_decision mismatch')
+        return
+      }
+      peer.phase = 'complete'
       if (peer.handshakeTimer) {
         clearTimeout(peer.handshakeTimer)
         peer.handshakeTimer = undefined
       }
-      peer.handshaken = true
+
       const transcript: PairingTranscript = {
         endpoint: this.options.endpoint,
         pid: this.options.pid,
@@ -300,8 +319,19 @@ export class PluginGateway {
       const approved =
         message.approved &&
         verifyPairingResponse(this.options.pairingNonce, transcript, message.response)
-      if (approved && !this.#leases.holder) {
+      if (!approved) {
+        this.#rejectPeer(peer.socket, 'pairing denied or invalid')
+        return
+      }
+
+      peer.authenticated = true
+      const preferred = this.#leases.getPreferredPairingCandidate()
+      if (
+        preferred?.windowInstanceId === peer.windowInstanceId &&
+        !this.#leases.holder
+      ) {
         const grant = this.#leases.pairAndGrant(peer.windowInstanceId)
+        peer.isLeaseHolder = true
         await this.#send(peer, {
           v: 1,
           seq: 0,
@@ -318,15 +348,14 @@ export class PluginGateway {
         return
       }
       if (message.lease_epoch !== pending.leaseEpoch) {
-        pending.cancelled = true
-        pending.resolve({ ok: false, code: 'internal' })
+        this.#settlePending(message.request_id, { ok: false, code: 'internal' })
         return
       }
       if (!message.ok) {
-        pending.resolve({ ok: false, code: message.error.code })
+        this.#settlePending(message.request_id, { ok: false, code: message.error.code })
         return
       }
-      pending.resolve(this.#mapSuccess(pending.method, message.result))
+      this.#settlePending(message.request_id, this.#mapSuccess(pending.method, message.result))
       return
     }
 
@@ -338,8 +367,29 @@ export class PluginGateway {
       if (message.lease_epoch !== pending.leaseEpoch) {
         return
       }
-      pending.resolve({ ok: false, code: message.reason })
+      this.#settlePending(message.request_id, { ok: false, code: message.reason })
     }
+  }
+
+  #settlePending(requestId: string, result: GatewayCallResult): void {
+    const pending = this.#pending.get(requestId)
+    if (!pending) {
+      return
+    }
+    pending.complete(result)
+  }
+
+  #finishPending(pending: PendingCall, result: GatewayCallResult): void {
+    if (!this.#pending.has(pending.requestId)) {
+      return
+    }
+    this.#pending.delete(pending.requestId)
+    clearTimeout(pending.deadlineTimer)
+    if (pending.onAbort) {
+      pending.signal?.removeEventListener('abort', pending.onAbort)
+    }
+    this.#leases.untrackPending(pending.requestId)
+    pending.releaseConcurrency()
   }
 
   #mapSuccess(method: OperationalRequest['method'], result: unknown): GatewayCallResult {
@@ -358,16 +408,16 @@ export class PluginGateway {
   }
 
   #dropPeer(socket: Socket): void {
+    if (this.#tearingDown) {
+      return
+    }
     const peer = this.#peers.get(socket)
     if (!peer) {
       return
     }
-    if (peer.handshakeTimer) {
-      clearTimeout(peer.handshakeTimer)
-    }
-    this.#peers.delete(socket)
+    const wasHolder = this.#leases.holder?.windowInstanceId === peer.windowInstanceId
+    this.#removePeerRecord(socket, peer)
     if (peer.windowInstanceId) {
-      this.#windowToSocket.delete(peer.windowInstanceId)
       try {
         this.#leases.disconnectWindow(peer.windowInstanceId)
       } catch {
@@ -375,6 +425,54 @@ export class PluginGateway {
       }
     }
     socket.destroy()
+    if (wasHolder) {
+      this.#revokeAllPeersAfterHolderLoss()
+    }
+  }
+
+  #revokeAllPeersAfterHolderLoss(): void {
+    this.#leases.markAllWindowsDisconnected()
+    this.#dropAllPeers()
+  }
+
+  #dropAllPeers(): void {
+    this.#tearingDown = true
+    for (const peer of this.#peers.values()) {
+      if (peer.handshakeTimer) {
+        clearTimeout(peer.handshakeTimer)
+      }
+      peer.socket.destroy()
+    }
+    this.#peers.clear()
+    this.#windowToSocket.clear()
+    this.#tearingDown = false
+  }
+
+  #rejectPeer(socket: Socket, reason: string): void {
+    const peer = this.#peers.get(socket)
+    if (peer) {
+      this.#removePeerRecord(socket, peer)
+    }
+    this.#diagnostic(`rejecting peer: ${reason}`)
+    socket.destroy()
+  }
+
+  #destroyPeer(socket: Socket, reason: string): void {
+    this.#diagnostic(`destroying peer: ${reason}`)
+    socket.destroy()
+  }
+
+  #removePeerRecord(socket: Socket, peer: PeerState): void {
+    if (peer.handshakeTimer) {
+      clearTimeout(peer.handshakeTimer)
+    }
+    this.#peers.delete(socket)
+    if (peer.windowInstanceId) {
+      const mapped = this.#windowToSocket.get(peer.windowInstanceId)
+      if (mapped === socket) {
+        this.#windowToSocket.delete(peer.windowInstanceId)
+      }
+    }
   }
 
   async #send(peer: PeerState, message: IpcMessage): Promise<void> {

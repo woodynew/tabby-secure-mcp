@@ -77,6 +77,16 @@ export class LeaseManager {
     this.#pending.set(request.requestId, request)
   }
 
+  untrackPending(requestId: string): void {
+    this.#pending.delete(requestId)
+  }
+
+  markAllWindowsDisconnected(): void {
+    for (const window of this.#windows.values()) {
+      window.connected = false
+    }
+  }
+
   disconnectWindow(windowInstanceId: string): LeaseGrant {
     const window = this.#windows.get(windowInstanceId)
     if (!window) {

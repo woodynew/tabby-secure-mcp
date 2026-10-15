@@ -11,10 +11,10 @@ import {
   acquireCompanionLock,
   createPairingNonce,
   createRuntimePaths,
-  writeRuntimeDescriptor,
   type CompanionLock,
   type RuntimeDescriptor,
 } from './index.js'
+import { bindCompanionRuntimeArtifacts } from './runtime/startup.js'
 
 function diagnostic(message: string): void {
   process.stderr.write(`${message}\n`)
@@ -43,8 +43,9 @@ async function main(): Promise<void> {
   }
 
   let lock: CompanionLock | undefined
-  let ownsRuntimeArtifacts = false
-  let gateway = createPluginGateway({
+  let ownsEndpoint = false
+  let ownsDescriptor = false
+  const gateway = createPluginGateway({
     endpoint: paths.endpoint,
     pid: process.pid,
     pairingNonce,
@@ -59,8 +60,8 @@ async function main(): Promise<void> {
       stdioHandle = undefined
     }
     await gateway.close().catch(() => undefined)
-    await removeIfOwned(paths.endpoint, ownsRuntimeArtifacts)
-    await removeIfOwned(paths.descriptorPath, ownsRuntimeArtifacts)
+    await removeIfOwned(paths.endpoint, ownsEndpoint)
+    await removeIfOwned(paths.descriptorPath, ownsDescriptor)
     if (lock) {
       await lock.release().catch(() => undefined)
       lock = undefined
@@ -69,9 +70,9 @@ async function main(): Promise<void> {
 
   try {
     lock = await acquireCompanionLock(paths.lockPath)
-    await gateway.listen()
-    await writeRuntimeDescriptor(paths, descriptor)
-    ownsRuntimeArtifacts = true
+    const ownership = await bindCompanionRuntimeArtifacts(gateway, paths, descriptor)
+    ownsEndpoint = ownership.ownsEndpoint
+    ownsDescriptor = ownership.ownsDescriptor
 
     stdioHandle = serveStdio(() => createMcpServer(gateway), {
       onerror: (error) => diagnostic(`mcp error: ${error.message}`),
@@ -93,7 +94,12 @@ async function main(): Promise<void> {
       return
     }
     diagnostic(`startup failed: ${(error as Error).message}`)
-    await shutdown('startup failure')
+    await removeIfOwned(paths.endpoint, ownsEndpoint)
+    await removeIfOwned(paths.descriptorPath, ownsDescriptor)
+    await gateway.close().catch(() => undefined)
+    if (lock) {
+      await lock.release().catch(() => undefined)
+    }
     process.exitCode = 1
   }
 }
