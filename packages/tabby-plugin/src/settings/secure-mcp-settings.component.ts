@@ -46,15 +46,22 @@ export class SecureMcpSettingsComponent implements OnInit {
     if (this.saving) {
       return
     }
+    const previousSelected = row.selected
     this.saving = true
     this.error = null
     try {
       const current = readAuthorizedSshProfileIds(this.config.store)
       const next = selected ? [...current, row.id] : current.filter(id => id !== row.id)
-      await persistAuthorizedSshProfileIds(this.config, next)
+      const saved = await persistAuthorizedSshProfileIds(this.config, next)
+      const persisted = readAuthorizedSshProfileIds(this.config.store)
+      if (JSON.stringify(saved) !== JSON.stringify(persisted)) {
+        throw new Error('authorized profile whitelist did not persist in Tabby config store')
+      }
       row.selected = selected
     } catch {
-      this.error = 'Failed to save authorized profile selection.'
+      row.selected = previousSelected
+      this.error =
+        'Failed to save authorized profile selection to Tabby config. Changes were not persisted.'
       await this.reload()
     } finally {
       this.saving = false

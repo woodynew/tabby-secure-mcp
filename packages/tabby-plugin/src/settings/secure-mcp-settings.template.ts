@@ -6,9 +6,9 @@ export const secureMcpSettingsTemplate = `
     </p>
 
     <div *ngIf="loading">Loading SSH profiles…</div>
-    <div *ngIf="error" class="text-danger">{{ error }}</div>
+    <div *ngIf="error" class="alert alert-danger" role="alert">{{ error }}</div>
 
-    <div *ngIf="!loading && !error">
+    <div *ngIf="!loading">
       <div *ngIf="rows.length === 0" class="text-muted">No eligible SSH profiles found.</div>
       <label *ngFor="let row of rows" class="d-block">
         <input
