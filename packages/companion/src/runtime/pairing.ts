@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { createHmac, randomBytes as nodeRandomBytes, timingSafeEqual } from 'node:crypto'
 
 export interface PairingTranscript {
@@ -10,6 +11,15 @@ export interface PairingTranscript {
 }
 
 const PAIRING_TRANSCRIPT_LABEL = 'tabby-secure-mcp-pairing-v1'
+export const PAIRING_NONCE_BYTES = 32
+
+export function decodePairingNonce(nonce: string): Buffer | undefined {
+  if (!/^[A-Za-z0-9_-]+$/.test(nonce)) {
+    return undefined
+  }
+  const bytes = Buffer.from(nonce, 'base64url')
+  return bytes.length === PAIRING_NONCE_BYTES ? bytes : undefined
+}
 
 export function createPairingNonce(
   randomBytes: (size: number) => Uint8Array = nodeRandomBytes,
@@ -29,12 +39,16 @@ export function canonicalPairingTranscript(transcript: PairingTranscript): strin
   ])
 }
 
-function pairingKey(nonce: string): Buffer {
-  return Buffer.from(nonce, 'base64url')
+function pairingKey(nonce: string): Buffer | undefined {
+  return decodePairingNonce(nonce)
 }
 
 export function createPairingResponse(nonce: string, transcript: PairingTranscript): string {
-  return createHmac('sha256', pairingKey(nonce))
+  const key = pairingKey(nonce)
+  if (!key) {
+    throw new Error('pairing nonce must be base64url encoding of exactly 32 bytes')
+  }
+  return createHmac('sha256', key)
     .update(canonicalPairingTranscript(transcript), 'utf8')
     .digest('hex')
 }
@@ -44,6 +58,9 @@ export function verifyPairingResponse(
   transcript: PairingTranscript,
   response: string,
 ): boolean {
+  if (pairingKey(nonce) === undefined) {
+    return false
+  }
   if (!/^[a-f0-9]{64}$/.test(response)) {
     return false
   }

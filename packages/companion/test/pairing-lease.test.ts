@@ -88,7 +88,7 @@ describe('LeaseManager', () => {
     const revoked = leases.disconnectWindow('main')
 
     expect(revoked).toEqual({ windowInstanceId: 'main', leaseEpoch: 2 })
-    expect(cancelled).toHaveBeenCalledWith('holder_disconnected')
+    expect(cancelled).toHaveBeenCalledWith('cancelled')
     expect(leases.holder).toBeUndefined()
     expect(leases.epoch).toBe(2)
     expect(leases.getPreferredPairingCandidate()?.windowInstanceId).toBe('standby')
@@ -96,6 +96,19 @@ describe('LeaseManager', () => {
 
     const replacement = leases.pairAndGrant('standby')
     expect(replacement.leaseEpoch).toBe(3)
+  })
+
+  it('leaves holder and epoch unchanged when a standby window disconnects', () => {
+    const leases = new LeaseManager()
+    leases.registerWindow({ windowInstanceId: 'main', isMainWindow: true })
+    leases.registerWindow({ windowInstanceId: 'standby', isMainWindow: false })
+    const grant = leases.pairAndGrant('main')
+
+    const revoked = leases.disconnectWindow('standby')
+
+    expect(revoked).toEqual({ windowInstanceId: 'standby', leaseEpoch: grant.leaseEpoch })
+    expect(leases.holder).toEqual(grant)
+    expect(leases.epoch).toBe(grant.leaseEpoch)
   })
 
   it('rejects pending work from a standby or stale epoch', () => {

@@ -5,9 +5,14 @@ export {
   type CompanionLockDependencies,
 } from './runtime/lock.js'
 export {
+  assertValidRuntimeDescriptor,
+  runtimeDescriptorSchema,
+  RuntimeDescriptorValidationError,
+  type RuntimeDescriptor,
+} from './runtime/descriptor.js'
+export {
   createRuntimePaths,
   writeRuntimeDescriptor,
-  type RuntimeDescriptor,
   type RuntimePathDependencies,
   type RuntimePaths,
   type WriteRuntimeDescriptorOptions,
@@ -22,6 +27,8 @@ export {
   canonicalPairingTranscript,
   createPairingNonce,
   createPairingResponse,
+  decodePairingNonce,
+  PAIRING_NONCE_BYTES,
   verifyPairingResponse,
   type PairingTranscript,
 } from './runtime/pairing.js'

@@ -1,3 +1,5 @@
+import type { ErrorCode } from '@tabby-secure-mcp/ipc-contract'
+
 export interface RegisteredWindow {
   windowInstanceId: string
   isMainWindow: boolean
@@ -12,7 +14,7 @@ export interface PendingRequest {
   requestId: string
   windowInstanceId: string
   leaseEpoch: number
-  onCancel: (reason: string) => void
+  onCancel: (reason: ErrorCode) => void
 }
 
 export class LeaseManager {
@@ -86,7 +88,7 @@ export class LeaseManager {
     if (wasHolder) {
       for (const pending of this.#pending.values()) {
         if (pending.windowInstanceId === windowInstanceId) {
-          pending.onCancel('holder_disconnected')
+          pending.onCancel('cancelled')
         }
       }
       this.#pending.clear()

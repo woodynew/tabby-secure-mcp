@@ -3,6 +3,11 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
 import path from 'node:path'
 
+import {
+  assertValidRuntimeDescriptor,
+  type RuntimeDescriptor,
+} from './descriptor.js'
+
 export interface RuntimePathDependencies {
   platform?: NodeJS.Platform
   env?: Readonly<Record<string, string | undefined>>
@@ -18,13 +23,7 @@ export interface RuntimePaths {
   lockPath: string
 }
 
-export interface RuntimeDescriptor {
-  protocol_version: 1
-  endpoint: string
-  pid: number
-  expires_at: number
-  pairing_nonce: string
-}
+export type { RuntimeDescriptor } from './descriptor.js'
 
 export interface WriteRuntimeDescriptorOptions {
   platform?: NodeJS.Platform
@@ -68,6 +67,7 @@ export async function writeRuntimeDescriptor(
   options: WriteRuntimeDescriptorOptions = {},
 ): Promise<void> {
   const platform = options.platform ?? process.platform
+  assertValidRuntimeDescriptor(descriptor, paths.endpoint)
   await mkdir(paths.runtimeDirectory, { recursive: true, mode: 0o700 })
   if (platform !== 'win32') {
     await chmod(paths.runtimeDirectory, 0o700)

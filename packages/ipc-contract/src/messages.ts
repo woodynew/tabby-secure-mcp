@@ -5,6 +5,8 @@ export const MAX_FRAME_BYTES = 64 * 1024
 export const MAX_BUFFER_BYTES = 128 * 1024
 export const MAX_JSON_DEPTH = 16
 export const MAX_STRING_BYTES = 8 * 1024
+/** Identifier fields cap Unicode code units; UTF-8 byte limits still apply globally. */
+export const MAX_IDENTIFIER_CODE_UNITS = 256
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 
@@ -56,7 +58,7 @@ function validateJsonValue(
   ctx.addIssue({ code: 'custom', message: 'value is not valid JSON' })
 }
 
-function secureSchema<T extends z.ZodType>(schema: T) {
+export function secureSchema<T extends z.ZodType>(schema: T) {
   return schema.superRefine((value, ctx) => validateJsonValue(value, ctx))
 }
 
@@ -65,7 +67,7 @@ const boundedString = z
   .refine((value) => Buffer.byteLength(value, 'utf8') <= MAX_STRING_BYTES, {
     message: `string exceeds ${MAX_STRING_BYTES} bytes`,
   })
-const identifier = boundedString.min(1).max(256)
+const identifier = boundedString.min(1).max(MAX_IDENTIFIER_CODE_UNITS)
 const sequence = z.number().int().positive()
 const leaseEpoch = z.number().int().positive()
 
@@ -174,11 +176,29 @@ export const rpcRequestSchema = secureSchema(
   }),
 )
 
+const sshProfileSummarySchema = z.strictObject({
+  profile_ref: identifier,
+  display_name: identifier,
+})
+
+export const listProfilesRpcResultSchema = z.strictObject({
+  profiles: z.array(sshProfileSummarySchema),
+})
+
+export const openProfileRpcResultSchema = z.strictObject({
+  status: z.literal('opened'),
+})
+
+export const rpcSuccessResultSchema = z.union([
+  listProfilesRpcResultSchema,
+  openProfileRpcResultSchema,
+])
+
 const rpcSuccessSchema = z.strictObject({
   ...operationalBase,
   type: z.literal('rpc_result'),
   ok: z.literal(true),
-  result: z.unknown(),
+  result: rpcSuccessResultSchema,
 })
 const rpcFailureSchema = z.strictObject({
   ...operationalBase,

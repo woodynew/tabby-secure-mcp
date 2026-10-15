@@ -49,7 +49,15 @@ describe('version 1 IPC schemas', () => {
         request_id: 'request-1',
         lease_epoch: 1,
         ok: true,
-        result: { profiles: [] },
+        result: { profiles: [{ profile_ref: 'ref-1', display_name: 'Primary' }] },
+      },
+      {
+        ...base,
+        type: 'rpc_result',
+        request_id: 'request-2',
+        lease_epoch: 1,
+        ok: true,
+        result: { status: 'opened' },
       },
       {
         ...base,

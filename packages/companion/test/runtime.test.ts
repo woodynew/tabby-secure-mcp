@@ -74,7 +74,7 @@ describe('runtime paths and descriptor', () => {
       endpoint: paths.endpoint,
       pid: 123,
       expires_at: 456,
-      pairing_nonce: 'descriptor-only-secret',
+      pairing_nonce: Buffer.alloc(32, 0xcd).toString('base64url'),
     }
 
     await writeRuntimeDescriptor(paths, descriptor, { platform: 'linux' })
