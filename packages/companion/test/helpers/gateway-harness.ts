@@ -18,7 +18,7 @@ export interface GatewayHarness {
 }
 
 export async function startGatewayHarness(
-  options: { handshakeTimeoutMs?: number } = {},
+  options: { handshakeTimeoutMs?: number; pairingDecisionTimeoutMs?: number } = {},
 ): Promise<GatewayHarness> {
   const base = await mkdtemp(path.join(tmpdir(), 'tabby-gw-test-'))
   const endpoint = path.join(base, 'companion.sock')
@@ -29,6 +29,7 @@ export async function startGatewayHarness(
     pid: 4242,
     pairingNonce,
     handshakeTimeoutMs: options.handshakeTimeoutMs,
+    pairingDecisionTimeoutMs: options.pairingDecisionTimeoutMs,
   })
   await gateway.listen()
   return {

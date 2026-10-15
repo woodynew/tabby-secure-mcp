@@ -18,6 +18,7 @@ import { ConcurrencyLimiter } from './concurrency.js'
 import { TokenBucket } from './token-bucket.js'
 
 export const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000
+export const DEFAULT_PAIRING_DECISION_TIMEOUT_MS = 30_000
 export const DEFAULT_RPC_DEADLINE_MS = 30_000
 
 export type GatewayCallResult =
@@ -35,6 +36,7 @@ export interface PluginGatewayOptions {
   pairingNonce: string
   protocolVersion?: number
   handshakeTimeoutMs?: number
+  pairingDecisionTimeoutMs?: number
   onDiagnostic?: (message: string) => void
 }
 
@@ -75,11 +77,14 @@ export class PluginGateway {
   readonly #limiter = new ConcurrencyLimiter(4)
   readonly #bucket = new TokenBucket({ capacity: 5, perMinute: 20 })
   readonly #handshakeTimeoutMs: number
+  readonly #pairingDecisionTimeoutMs: number
   #closed = false
   #tearingDown = false
 
   constructor(private readonly options: PluginGatewayOptions) {
     this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS
+    this.#pairingDecisionTimeoutMs =
+      options.pairingDecisionTimeoutMs ?? DEFAULT_PAIRING_DECISION_TIMEOUT_MS
     this.#server = createServer((socket) => {
       this.#accept(socket)
     })
@@ -237,9 +242,9 @@ export class PluginGateway {
       isLeaseHolder: false,
     }
     this.#peers.set(socket, peer)
-    peer.handshakeTimer = setTimeout(() => {
+    this.#startPeerTimer(peer, this.#handshakeTimeoutMs, () => {
       this.#rejectPeer(socket, 'handshake timeout')
-    }, this.#handshakeTimeoutMs)
+    })
 
     socket.on('data', (chunk) => {
       try {
@@ -284,6 +289,9 @@ export class PluginGateway {
         seq: 0,
         type: 'companion_challenge',
         companion_challenge: peer.companionChallenge,
+      })
+      this.#startPeerTimer(peer, this.#pairingDecisionTimeoutMs, () => {
+        this.#rejectPeer(peer.socket, 'pairing decision timeout')
       })
       return
     }
@@ -494,6 +502,19 @@ export class PluginGateway {
 
   #diagnostic(message: string): void {
     this.options.onDiagnostic?.(message)
+  }
+
+  #startPeerTimer(peer: PeerState, timeoutMs: number, onTimeout: () => void): void {
+    if (peer.handshakeTimer) {
+      clearTimeout(peer.handshakeTimer)
+      peer.handshakeTimer = undefined
+    }
+    peer.handshakeTimer = setTimeout(() => {
+      if (this.#peers.get(peer.socket) !== peer) {
+        return
+      }
+      onTimeout()
+    }, timeoutMs)
   }
 }
 

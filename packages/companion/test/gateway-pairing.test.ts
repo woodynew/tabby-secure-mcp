@@ -86,15 +86,45 @@ describe('PluginGateway pairing lifecycle', () => {
     expect(first.connected).toBe(false)
   })
 
-  it('closes peers that do not finish handshake before the deadline', async () => {
+  it('closes peers that never send plugin_hello before the machine handshake deadline', async () => {
     const harness = await startGatewayHarness({ handshakeTimeoutMs: 80 })
+    harnesses.push(() => harness.close())
+
+    const peer = await RawPluginPeer.connect(harness.endpoint)
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(peer.connected).toBe(false)
+  })
+
+  it('closes peers that delay pairing_decision past the approval window', async () => {
+    const harness = await startGatewayHarness({
+      handshakeTimeoutMs: 5_000,
+      pairingDecisionTimeoutMs: 120,
+    })
     harnesses.push(() => harness.close())
 
     const peer = await RawPluginPeer.connect(harness.endpoint)
     await peer.hello('slow', true)
     await peer.waitForMessage('companion_challenge')
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    await new Promise((resolve) => setTimeout(resolve, 200))
     expect(peer.connected).toBe(false)
+  })
+
+  it('grants lease when pairing_decision arrives after machine handshake but within approval window', async () => {
+    const harness = await startGatewayHarness({
+      handshakeTimeoutMs: 50,
+      pairingDecisionTimeoutMs: 2_000,
+    })
+    harnesses.push(() => harness.close())
+
+    const peer = await RawPluginPeer.connect(harness.endpoint)
+    await peer.hello('main', true)
+    await peer.waitForMessage('companion_challenge')
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(peer.connected).toBe(true)
+
+    await peer.pairingDecision(harness, 'main')
+    const grant = await peer.waitForMessage('lease_granted')
+    expect(grant).toMatchObject({ lease_epoch: 1 })
   })
 
   it('destroys peers that send pairing_decision before plugin_hello', async () => {
