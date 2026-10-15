@@ -24,6 +24,13 @@ module.exports = {
   resolve: {
     extensions: ['.ts', '.js'],
   },
+  externalsType: 'commonjs',
+  externals: [
+    /^@angular\/(?!common\/locales(?:\/|$))/,
+    /^@ng-bootstrap(?:\/|$)/,
+    /^rxjs(?:\/|$)/,
+    /^tabby-/,
+  ],
   output: {
     path: path.resolve(__dirname, 'dist'),
     filename: 'index.js',
