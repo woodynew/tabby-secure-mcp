@@ -339,7 +339,7 @@ describe('companion stdio MCP integration', () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [cliPath],
-      env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir },
+      env: { ...process.env, ...runtimeIsolationEnv(runtimeDir) },
       stderr: 'pipe',
     })
     const second = new Client({ name: 'second', version: '0.0.0' }, { capabilities: {} })

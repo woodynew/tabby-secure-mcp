@@ -131,7 +131,13 @@ describe('inspectPackedTarball integration', () => {
     expect(result.companion.entries.sort()).toEqual(['dist/cli.js', 'package.json'])
     expect(result.plugin.bundle).toMatch(/webpackUniversalModuleDefinition|module\.exports/)
     expect(result.companion.shebang).toBe('#!/usr/bin/env node\n')
-    expect(result.companion.mode & 0o111).not.toBe(0)
+    expect(() =>
+      assertCompanionLaunchMode({
+        mode: result.companion.mode,
+        platform: process.platform,
+        bin: result.companion.bin,
+      }),
+    ).not.toThrow()
   })
 })
 
