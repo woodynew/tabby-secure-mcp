@@ -42,6 +42,19 @@ describe('runtime paths and descriptor', () => {
     })
     expect(macos.runtimeDirectory).toBe('/private/tmp/test/tabby-secure-mcp')
     expect(macos.endpoint.endsWith('/companion.sock')).toBe(true)
+    expect(macos.endpoint).toBe('/private/tmp/test/tabby-secure-mcp/companion.sock')
+  })
+
+  it('keeps macOS sockets on tmpdir when XDG_RUNTIME_DIR is set', () => {
+    const macos = createRuntimePaths({
+      platform: 'darwin',
+      env: { XDG_RUNTIME_DIR: '/run/user/long-xdg-runtime' },
+      homedir: () => '/Users/test',
+      tmpdir: () => '/tmp/tsm',
+      randomBytes: () => Buffer.from('0011223344556677', 'hex'),
+    })
+    expect(macos.endpoint).toBe('/tmp/tsm/tabby-secure-mcp/companion.sock')
+    expect(Buffer.byteLength(macos.endpoint)).toBeLessThanOrEqual(PORTABLE_UNIX_SOCKET_PATH_MAX)
   })
 
   it('rejects unix socket paths longer than the macOS sockaddr limit', () => {

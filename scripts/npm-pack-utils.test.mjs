@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { parseNpmPackJson } from './npm-pack-utils.mjs'
+import { parseNpmPackJson, resolveNpmLauncher } from './npm-pack-utils.mjs'
+
+describe('resolveNpmLauncher', () => {
+  it('launches npm through cmd on Windows', () => {
+    expect(resolveNpmLauncher('win32')).toEqual({ command: 'npm.cmd', shell: true })
+    expect(resolveNpmLauncher('linux')).toEqual({ command: 'npm', shell: false })
+  })
+})
 
 describe('parseNpmPackJson', () => {
   it('parses a single npm pack record', () => {

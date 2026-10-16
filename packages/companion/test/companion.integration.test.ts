@@ -34,8 +34,20 @@ afterEach(async () => {
   activePeers.splice(0).forEach((peer) => peer.close())
 })
 
+function runtimeIsolationEnv(runtimeDir: string): Record<string, string> {
+  if (process.platform === 'win32') {
+    return { LOCALAPPDATA: runtimeDir }
+  }
+  if (process.platform === 'darwin') {
+    return { TMPDIR: runtimeDir }
+  }
+  return { XDG_RUNTIME_DIR: runtimeDir }
+}
+
 async function createRuntimeDir(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), 'tabby-companion-int-'))
+  const root = process.platform === 'darwin' ? '/tmp' : tmpdir()
+  const prefix = process.platform === 'darwin' ? 'tsm-' : 'tabby-companion-int-'
+  const dir = await mkdtemp(path.join(root, prefix))
   runtimeDirs.push(dir)
   return dir
 }
@@ -53,7 +65,7 @@ async function startCompanion(
     args: [cliPath],
     env: {
       ...process.env,
-      XDG_RUNTIME_DIR: runtimeDir,
+      ...runtimeIsolationEnv(runtimeDir),
       ...env,
     },
     stderr: 'pipe',

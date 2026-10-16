@@ -35,13 +35,21 @@ export function parseNpmPackJson(stdout) {
   return record
 }
 
+export function resolveNpmLauncher(platform = process.platform) {
+  if (platform === 'win32') {
+    return { command: 'npm.cmd', shell: true }
+  }
+  return { command: 'npm', shell: false }
+}
+
 export function runCommand(command, args, options = {}) {
+  const launched = command === 'npm' ? resolveNpmLauncher() : { command, shell: false }
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(launched.command, args, {
       cwd: options.cwd ?? repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: options.env ?? process.env,
-      shell: false,
+      shell: launched.shell,
     })
     let stdout = ''
     let stderr = ''
@@ -56,7 +64,7 @@ export function runCommand(command, args, options = {}) {
       if (code === 0) {
         resolve({ stdout, stderr })
       } else {
-        reject(new Error(`${command} ${args.join(' ')} failed (${code}): ${stderr || stdout}`))
+        reject(new Error(`${launched.command} ${args.join(' ')} failed (${code}): ${stderr || stdout}`))
       }
     })
   })

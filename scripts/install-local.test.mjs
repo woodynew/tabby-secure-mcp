@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { resolveNpmLauncher } from './npm-pack-utils.mjs'
+
 import {
   PLUGIN_PACKAGE_NAME,
   COMPANION_PACKAGE_NAME,
@@ -275,7 +277,12 @@ describe('runInstall smoke', () => {
   })
 
   it('packs, installs offline into a temp prefix, and runs companion --help', async () => {
-    const build = spawnSync('npm', ['run', 'build'], { cwd: repoRoot, encoding: 'utf8' })
+    const npm = resolveNpmLauncher()
+    const build = spawnSync(npm.command, ['run', 'build'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      shell: npm.shell,
+    })
     expect(build.status).toBe(0)
 
     pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-plugins-smoke-'))
@@ -299,7 +306,10 @@ describe('runInstall smoke', () => {
     await rm(packDir, { recursive: true, force: true })
     await assertNoTransientInstallerReferences(pluginsDir)
 
-    const help = spawnSync(result.companionCommand, ['--help'], { encoding: 'utf8' })
+    const help = spawnSync(result.companionCommand, ['--help'], {
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+    })
     expect(help.status).toBe(0)
     expect(help.stdout).toMatch(/tabby-secure-mcp/)
   }, 120_000)
