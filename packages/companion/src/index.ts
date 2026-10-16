@@ -11,7 +11,9 @@ export {
   type RuntimeDescriptor,
 } from './runtime/descriptor.js'
 export {
+  assertBindableUnixSocketPath,
   createRuntimePaths,
+  PORTABLE_UNIX_SOCKET_PATH_MAX,
   writeRuntimeDescriptor,
   type RuntimePathDependencies,
   type RuntimePaths,

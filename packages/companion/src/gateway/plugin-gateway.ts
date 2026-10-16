@@ -13,6 +13,7 @@ import {
 } from '@tabby-secure-mcp/ipc-contract'
 
 import { LeaseManager } from '../runtime/lease.js'
+import { assertBindableUnixSocketPath } from '../runtime/paths.js'
 import { verifyPairingResponse, type PairingTranscript } from '../runtime/pairing.js'
 import { ConcurrencyLimiter } from './concurrency.js'
 import { TokenBucket } from './token-bucket.js'
@@ -93,6 +94,7 @@ export class PluginGateway {
   async listen(): Promise<void> {
     const platform = this.options.platform ?? process.platform
     if (platform !== 'win32') {
+      assertBindableUnixSocketPath(this.options.endpoint)
       await unlink(this.options.endpoint).catch(() => undefined)
     }
     await new Promise<void>((resolve, reject) => {

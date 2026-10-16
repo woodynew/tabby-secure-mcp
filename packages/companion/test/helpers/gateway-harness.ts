@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { mkdir, mkdtemp, unlink } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -17,12 +18,21 @@ export interface GatewayHarness {
   close(): Promise<void>
 }
 
+export function createTestEndpoint(directory: string): string {
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\tabby-secure-mcp-${randomBytes(8).toString('hex')}`
+  }
+  return path.join(directory, 'companion.sock')
+}
+
 export async function startGatewayHarness(
   options: { handshakeTimeoutMs?: number; pairingDecisionTimeoutMs?: number } = {},
 ): Promise<GatewayHarness> {
   const base = await mkdtemp(path.join(tmpdir(), 'tabby-gw-test-'))
-  const endpoint = path.join(base, 'companion.sock')
-  await mkdir(path.dirname(endpoint), { recursive: true, mode: 0o700 })
+  const endpoint = createTestEndpoint(base)
+  if (process.platform !== 'win32') {
+    await mkdir(path.dirname(endpoint), { recursive: true, mode: 0o700 })
+  }
   const pairingNonce = createPairingNonce(() => Buffer.alloc(32, 0x42))
   const gateway = createPluginGateway({
     endpoint,

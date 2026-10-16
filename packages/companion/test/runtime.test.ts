@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   CompanionAlreadyRunningError,
   acquireCompanionLock,
+  assertBindableUnixSocketPath,
   createRuntimePaths,
+  PORTABLE_UNIX_SOCKET_PATH_MAX,
   writeRuntimeDescriptor,
   type RuntimeDescriptor,
 } from '../src/index.js'
@@ -42,6 +44,11 @@ describe('runtime paths and descriptor', () => {
     expect(macos.endpoint.endsWith('/companion.sock')).toBe(true)
   })
 
+  it('rejects unix socket paths longer than the macOS sockaddr limit', () => {
+    const endpoint = `/tmp/${'a'.repeat(PORTABLE_UNIX_SOCKET_PATH_MAX)}.sock`
+    expect(() => assertBindableUnixSocketPath(endpoint)).toThrow(/103/)
+  })
+
   it('generates a random Windows named pipe and LOCALAPPDATA descriptor', () => {
     const paths = createRuntimePaths({
       platform: 'win32',
@@ -60,29 +67,32 @@ describe('runtime paths and descriptor', () => {
     )
   })
 
-  it('creates a 0700 Unix directory and a 0600 descriptor containing the nonce', async () => {
-    const parent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-test-'))
-    const paths = createRuntimePaths({
-      platform: 'linux',
-      env: { XDG_RUNTIME_DIR: parent },
-      homedir: () => parent,
-      tmpdir: () => parent,
-      randomBytes: () => Buffer.alloc(8),
-    })
-    const descriptor: RuntimeDescriptor = {
-      protocol_version: 1,
-      endpoint: paths.endpoint,
-      pid: 123,
-      expires_at: 456,
-      pairing_nonce: Buffer.alloc(32, 0xcd).toString('base64url'),
-    }
+  it.skipIf(process.platform === 'win32')(
+    'creates a 0700 Unix directory and a 0600 descriptor containing the nonce',
+    async () => {
+      const parent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-test-'))
+      const paths = createRuntimePaths({
+        platform: 'linux',
+        env: { XDG_RUNTIME_DIR: parent },
+        homedir: () => parent,
+        tmpdir: () => parent,
+        randomBytes: () => Buffer.alloc(8),
+      })
+      const descriptor: RuntimeDescriptor = {
+        protocol_version: 1,
+        endpoint: paths.endpoint,
+        pid: 123,
+        expires_at: 456,
+        pairing_nonce: Buffer.alloc(32, 0xcd).toString('base64url'),
+      }
 
-    await writeRuntimeDescriptor(paths, descriptor, { platform: 'linux' })
+      await writeRuntimeDescriptor(paths, descriptor, { platform: 'linux' })
 
-    expect((await stat(paths.runtimeDirectory)).mode & 0o777).toBe(0o700)
-    expect((await stat(paths.descriptorPath)).mode & 0o777).toBe(0o600)
-    expect(JSON.parse(await readFile(paths.descriptorPath, 'utf8'))).toEqual(descriptor)
-  })
+      expect((await stat(paths.runtimeDirectory)).mode & 0o777).toBe(0o700)
+      expect((await stat(paths.descriptorPath)).mode & 0o777).toBe(0o600)
+      expect(JSON.parse(await readFile(paths.descriptorPath, 'utf8'))).toEqual(descriptor)
+    },
+  )
 })
 
 describe('companion process lock', () => {

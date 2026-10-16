@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { randomBytes as nodeRandomBytes } from 'node:crypto'
 import { chmod, mkdir, writeFile } from 'node:fs/promises'
 import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
@@ -14,6 +15,14 @@ export interface RuntimePathDependencies {
   homedir?: () => string
   tmpdir?: () => string
   randomBytes?: (size: number) => Uint8Array
+}
+
+export const PORTABLE_UNIX_SOCKET_PATH_MAX = 103
+
+export function assertBindableUnixSocketPath(endpoint: string): void {
+  if (Buffer.byteLength(endpoint) > PORTABLE_UNIX_SOCKET_PATH_MAX) {
+    throw new Error(`unix socket path exceeds ${PORTABLE_UNIX_SOCKET_PATH_MAX} bytes`)
+  }
 }
 
 export interface RuntimePaths {

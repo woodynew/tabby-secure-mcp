@@ -5,6 +5,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createPluginGateway } from '../../companion/src/gateway/plugin-gateway.js'
+import { createTestEndpoint } from '../../companion/test/helpers/gateway-harness.js'
 import { createPairingNonce } from '../../companion/src/runtime/pairing.js'
 import { AuditService } from '../src/audit/audit-service'
 import { ApprovalGatekeeper } from '../src/approval/approval-gatekeeper'
@@ -39,8 +40,10 @@ class FakeClock implements MonotonicClock {
 describe('PluginRuntimeService integration', () => {
   it('lists authorized profiles without leaking secret fields over rpc_result', async () => {
     const base = await mkdtemp(path.join(tmpdir(), 'plugin-int-'))
-    const endpoint = path.join(base, 'companion.sock')
-    await mkdir(path.dirname(endpoint), { recursive: true })
+    const endpoint = createTestEndpoint(base)
+    if (process.platform !== 'win32') {
+      await mkdir(path.dirname(endpoint), { recursive: true })
+    }
     const pairingNonce = createPairingNonce(() => Buffer.alloc(32, 4))
     const gateway = createPluginGateway({ endpoint, pid: 9001, pairingNonce })
     await gateway.listen()
