@@ -1,0 +1,34 @@
+{
+  "name": "tabby-secure-mcp-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "workspaces": [
+    "packages/ipc-contract",
+    "packages/companion",
+    "packages/tabby-plugin"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "pretypecheck": "npm run build --workspace @tabby-secure-mcp/ipc-contract",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && npm run test:scripts",
+    "pretest:scripts": "npm run build",
+    "test:scripts": "vitest run --config vitest.scripts.config.mts",
+    "test:integration": "npm run test:integration --workspaces --if-present",
+    "pack:check": "node scripts/pack-check.mjs",
+    "install:local": "node scripts/install-local.mjs"
+  },
+  "devDependencies": {
+    "vite": "8.3.4",
+    "vitest": "4.1.11"
+  },
+  "overrides": {
+    "@types/node": "20.19.23",
+    "tabby-secure-mcp": {
+      "typescript": "4.9.5"
+    }
+  }
+}
