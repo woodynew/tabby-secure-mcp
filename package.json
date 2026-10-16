@@ -12,8 +12,10 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "pretypecheck": "npm run build --workspace @tabby-secure-mcp/ipc-contract",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
+    "pretest:scripts": "npm run build",
     "test:scripts": "vitest run --config vitest.scripts.config.mts",
     "test:integration": "npm run test:integration --workspaces --if-present",
     "pack:check": "node scripts/pack-check.mjs",

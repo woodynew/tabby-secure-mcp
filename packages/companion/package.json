@@ -15,6 +15,7 @@
   ],
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --format=esm --platform=node --target=node20 --outfile=dist/cli.js --banner:js=\"#!/usr/bin/env node\"",
+    "postbuild": "node scripts/mark-cli-executable.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config ../../vitest.config.mts --root .",
     "test:integration": "vitest run --config ../../vitest.integration.config.mts --root .",

@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "build": "node build.cjs",
+    "pretest": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.mts --root .",
     "test:integration": "vitest run --config ../../vitest.integration.config.mts --root .",

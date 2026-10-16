@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   EXPECTED_VERSION,
   TABBY_PLUGIN_KEYWORD,
+  assertCompanionLaunchMode,
   assertPackManifest,
   assertTabbyPluginDiscoveryManifest,
   inspectPackedTarball,
@@ -57,6 +58,40 @@ describe('assertTabbyPluginDiscoveryManifest', () => {
       main: 'dist/index.js',
       author: 'tabby-secure-mcp',
     })
+  })
+})
+
+describe('assertCompanionLaunchMode', () => {
+  const bin = { 'tabby-secure-mcp': './dist/cli.js' }
+
+  it('accepts a Windows tarball whose bin shim targets the CLI', () => {
+    expect(() =>
+      assertCompanionLaunchMode({
+        mode: 0o100644,
+        platform: 'win32',
+        bin,
+      }),
+    ).not.toThrow()
+  })
+
+  it('rejects a companion whose bin field does not target the CLI', () => {
+    expect(() =>
+      assertCompanionLaunchMode({
+        mode: 0o100755,
+        platform: 'win32',
+        bin: { 'tabby-secure-mcp': './other.js' },
+      }),
+    ).toThrow(/bin/i)
+  })
+
+  it('rejects a Unix tarball whose CLI is not executable', () => {
+    expect(() =>
+      assertCompanionLaunchMode({
+        mode: 0o100644,
+        platform: 'linux',
+        bin,
+      }),
+    ).toThrow(/executable/i)
   })
 })
 

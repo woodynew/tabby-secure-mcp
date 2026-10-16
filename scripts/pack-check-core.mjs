@@ -20,6 +20,15 @@ export function resolveTabbyPluginAuthor(manifest) {
   return author.name || author
 }
 
+export function assertCompanionLaunchMode({ mode, platform, bin }) {
+  if (!bin || bin['tabby-secure-mcp'] !== './dist/cli.js') {
+    throw new Error('companion package.json bin must point at ./dist/cli.js')
+  }
+  if (platform !== 'win32' && (mode & 0o111) === 0) {
+    throw new Error('companion CLI tarball entry is not marked executable')
+  }
+}
+
 export function assertTabbyPluginDiscoveryManifest(manifest, label = 'plugin') {
   const keywords = manifest.keywords
   if (!Array.isArray(keywords) || !keywords.includes(TABBY_PLUGIN_KEYWORD)) {
@@ -209,6 +218,7 @@ export async function inspectPackedTarball(options = {}) {
           ? companionShebang.slice(0, companionShebang.indexOf('\n') + 1)
           : companionShebang,
         mode: companionCliRecord.mode,
+        bin: companionManifest.bin,
       },
     }
 
@@ -221,9 +231,11 @@ export async function inspectPackedTarball(options = {}) {
     if (!result.companion.shebang.startsWith('#!/usr/bin/env node')) {
       throw new Error('companion CLI is missing a Node shebang')
     }
-    if ((result.companion.mode & 0o111) === 0) {
-      throw new Error('companion CLI tarball entry is not marked executable')
-    }
+    assertCompanionLaunchMode({
+      mode: result.companion.mode,
+      platform: process.platform,
+      bin: result.companion.bin,
+    })
 
     return result
   } finally {
