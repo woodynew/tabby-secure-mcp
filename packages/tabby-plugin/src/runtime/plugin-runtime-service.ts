@@ -417,6 +417,10 @@ export class PluginRuntimeService {
     }
     if (message.request.method === 'get_ssh_operation_authorization') {
       await this.handleAuthorizationRpc(message, generation)
+      return
+    }
+    if (message.request.method === 'run_authorized_ssh_command') {
+      await this.handleCommandRpc(message, generation)
     }
   }
 
@@ -505,6 +509,89 @@ export class PluginRuntimeService {
         ok: false,
         code: 'internal',
       })
+    }
+  }
+
+  private async handleCommandRpc(
+    message: Extract<IpcMessage, { type: 'rpc_request' }>,
+    generation: number,
+  ): Promise<void> {
+    if (message.request.method !== 'run_authorized_ssh_command') {
+      return
+    }
+    const requestId = message.request_id
+    const leaseEpoch = message.lease_epoch
+    const existing = this.pendingRpc.get(requestId)
+    if (existing) {
+      existing.controller.abort()
+      this.pendingRpc.delete(requestId)
+      this.onDiagnostic('protocol_violation')
+      this.teardownConnection('protocol_violation')
+      if (!this.destroyed) {
+        this.scheduleReconnect(0)
+      }
+      return
+    }
+
+    const controller = new AbortController()
+    this.pendingRpc.set(requestId, {
+      leaseEpoch,
+      generation,
+      controller,
+      cancelled: false,
+      cancelSent: false,
+    })
+
+    try {
+      const result = await this.gatekeeper.runAuthorizedSshCommand({
+        requestId,
+        leaseEpoch,
+        profileRef: message.request.params.profile_ref,
+        command: message.request.params.command,
+        deadlineMonotonicMs: this.clock.now() + 45_000,
+        signal: controller.signal,
+      })
+      const pending = this.pendingRpc.get(requestId)
+      if (!pending || pending.cancelled || pending.generation !== generation) {
+        return
+      }
+      this.pendingRpc.delete(requestId)
+      if (!this.canServeRpc(leaseEpoch, generation)) {
+        return
+      }
+      if (result.ok) {
+        void this.audit.safeAppend({ event: 'command_result', result: 'ok', requestId })
+        await this.sendRpcResult(requestId, leaseEpoch, generation, {
+          ok: true,
+          result: {
+            status: result.truncated ? 'truncated' : 'completed',
+            command_class: result.commandClass,
+            output: result.output,
+            truncated: result.truncated,
+          },
+        })
+        return
+      }
+      const code = result.code === 'expired' ? 'expired' : mapApprovalError(result.code)
+      void this.audit.safeAppend({
+        event: 'command_result',
+        result: 'error',
+        requestId,
+        errorCode: code,
+      })
+      await this.sendRpcResult(requestId, leaseEpoch, generation, { ok: false, code })
+    } catch {
+      this.pendingRpc.delete(requestId)
+      if (!this.canServeRpc(leaseEpoch, generation)) {
+        return
+      }
+      void this.audit.safeAppend({
+        event: 'command_result',
+        result: 'error',
+        requestId,
+        errorCode: 'internal',
+      })
+      await this.sendRpcResult(requestId, leaseEpoch, generation, { ok: false, code: 'internal' })
     }
   }
 

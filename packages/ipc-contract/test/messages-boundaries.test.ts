@@ -156,6 +156,28 @@ describe('IPC message validation boundaries', () => {
     expect(
       rpcResultSchema.safeParse(
         rpcSuccess({
+          status: 'completed',
+          command_class: 'read_only',
+          output: 'file\n',
+          truncated: false,
+        }),
+      ).success,
+    ).toBe(true)
+    expect(
+      rpcResultSchema.safeParse(
+        rpcSuccess({
+          status: 'completed',
+          command_class: 'read_only',
+          output: 'file\n',
+          truncated: false,
+          command: 'ls',
+        }),
+      ).success,
+    ).toBe(false)
+
+    expect(
+      rpcResultSchema.safeParse(
+        rpcSuccess({
           profiles: [{ profile_ref: 'ref-1', display_name: 'Primary', extra: true }],
         }),
       ).success,

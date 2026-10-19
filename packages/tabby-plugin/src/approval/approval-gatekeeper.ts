@@ -6,7 +6,10 @@ import {
   publicOperationTierPolicy,
   type GrantedOperationTier,
   type OperationTierPolicy,
+  type SshCommandClass,
 } from '../authorization/operation-tier-policy'
+import { authorizeSingleSshCommand } from '../authorization/ssh-command'
+import { isSingleCommandTab, runSingleSshCommand } from '../ssh/ssh-command-runner'
 import { presentWithApprovalDeadline } from './approval-deadline'
 import { buildOpenApprovalDigest } from './approval-digest'
 import {
@@ -18,6 +21,8 @@ import type { ApprovalScheduler } from './approval-scheduler'
 import { SystemApprovalScheduler } from './approval-scheduler'
 import {
   computeEffectiveOpenDeadline,
+  isValidLeaseEpoch,
+  isValidOpenRequestId,
   type OpenAuthorizedOperation,
   validateOpenApprovalRequest,
 } from './open-request-validation'
@@ -70,6 +75,21 @@ export type PublicOperationTierPolicy = Pick<
   OperationTierPolicy,
   'tier' | 'rank' | 'label' | 'subject' | 'effect'
 >
+
+export type SshCommandErrorCode = ApprovalErrorCode | 'expired'
+
+export interface SshCommandRequest {
+  requestId: string
+  leaseEpoch: number
+  profileRef: string
+  command: string
+  deadlineMonotonicMs: number
+  signal?: AbortSignal
+}
+
+export type SshCommandResult =
+  | { ok: true; commandClass: SshCommandClass; output: string; truncated: boolean }
+  | { ok: false; code: SshCommandErrorCode }
 
 export type OperationAuthorizationDescription =
   | {
@@ -344,6 +364,121 @@ export class ApprovalGatekeeper {
       return { ok: true, status: 'opened' }
     } catch {
       return { ok: false, code: 'target_unavailable' }
+    }
+  }
+
+  async runAuthorizedSshCommand(request: SshCommandRequest): Promise<SshCommandResult> {
+    if (request.signal?.aborted) {
+      return { ok: false, code: 'cancelled' }
+    }
+    if (!isValidOpenRequestId(request.requestId) || !isValidLeaseEpoch(request.leaseEpoch)) {
+      return { ok: false, code: 'not_approved' }
+    }
+    const activeLeaseEpoch = this.leaseEpochSource()
+    if (activeLeaseEpoch === null || request.leaseEpoch !== activeLeaseEpoch) {
+      return { ok: false, code: 'not_approved' }
+    }
+    if (this.seenRequestIds.has(request.requestId)) {
+      return { ok: false, code: 'not_approved' }
+    }
+    const authorized = authorizeSingleSshCommand({
+      command: request.command,
+      grantedTier: 'full',
+      grantFresh: true,
+    })
+    if (!authorized.ok && authorized.reason === 'not_a_single_command') {
+      return { ok: false, code: 'not_approved' }
+    }
+    if (this.presentationInFlight) {
+      return { ok: false, code: 'busy' }
+    }
+
+    this.presentationInFlight = true
+    this.rememberRequestId(request.requestId)
+    try {
+      let profile
+      try {
+        await this.authorizedProfiles.listAuthorizedProfiles()
+        profile = await this.authorizedProfiles.resolveAuthorizedProfile(request.profileRef)
+      } catch {
+        return { ok: false, code: 'target_unavailable' }
+      }
+      if (typeof profile.id !== 'string') {
+        return { ok: false, code: 'target_unavailable' }
+      }
+      let digest: string
+      let approvedSnapshot: ProfileSecuritySnapshot
+      try {
+        digest = stableProfileDigest(profile)
+        approvedSnapshot = buildProfileSecuritySnapshot(profile, this.runKey)
+      } catch {
+        return { ok: false, code: 'target_unavailable' }
+      }
+      const grant = this.memory
+        ? this.memory.effectiveGrant(profile.id, digest)
+        : { openSession: false, operationTier: 'none' as const }
+      const decision = authorizeSingleSshCommand({
+        command: request.command,
+        grantedTier: grant.operationTier,
+        grantFresh: true,
+      })
+      if (!decision.ok) {
+        return { ok: false, code: 'not_approved' }
+      }
+      if (request.signal?.aborted) {
+        return { ok: false, code: 'cancelled' }
+      }
+      if (this.clock.now() >= request.deadlineMonotonicMs) {
+        return { ok: false, code: 'expired' }
+      }
+
+      let opened: unknown
+      try {
+        opened = await this.profilesService.openNewTabForProfile(profile)
+      } catch {
+        return { ok: false, code: 'target_unavailable' }
+      }
+      if (!isSingleCommandTab(opened)) {
+        return { ok: false, code: 'target_unavailable' }
+      }
+
+      let freshProfile
+      try {
+        freshProfile = await this.authorizedProfiles.resolveAuthorizedProfile(request.profileRef)
+        const freshSnapshot = buildProfileSecuritySnapshot(freshProfile, this.runKey)
+        if (!profileSecuritySnapshotsEqual(approvedSnapshot, freshSnapshot)) {
+          return { ok: false, code: 'target_unavailable' }
+        }
+      } catch {
+        return { ok: false, code: 'target_unavailable' }
+      }
+
+      const nonceBytes = new Uint8Array(8)
+      crypto.getRandomValues(nonceBytes)
+      const markerNonce = Array.from(nonceBytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+      const ran = await runSingleSshCommand({
+        tab: opened,
+        command: decision.command,
+        markerNonce,
+        signal: request.signal,
+        deadlineMonotonicMs: request.deadlineMonotonicMs,
+        clock: this.clock,
+        scheduler: this.scheduler,
+      })
+      if (!ran.ok) {
+        return {
+          ok: false,
+          code: ran.reason === 'not_ready' ? 'target_unavailable' : ran.reason,
+        }
+      }
+      return {
+        ok: true,
+        commandClass: decision.commandClass,
+        output: ran.output,
+        truncated: ran.truncated,
+      }
+    } finally {
+      this.presentationInFlight = false
     }
   }
 

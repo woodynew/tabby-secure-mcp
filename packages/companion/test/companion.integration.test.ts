@@ -26,6 +26,7 @@ beforeAll(() => {
     expect(contents).toMatch(/serveStdio/)
     expect(contents).toMatch(/list_authorized_ssh_profiles/)
     expect(contents).toMatch(/get_ssh_operation_authorization/)
+    expect(contents).toMatch(/run_authorized_ssh_command/)
     expect(contents).toMatch(/tabby-secure-mcp-pairing-v1/)
   })
 })
@@ -143,6 +144,7 @@ describe('companion stdio MCP integration', () => {
       'get_ssh_operation_authorization',
       'list_authorized_ssh_profiles',
       'open_authorized_ssh_profile',
+      'run_authorized_ssh_command',
     ])
 
     const result = await client.callTool({
@@ -256,6 +258,49 @@ describe('companion stdio MCP integration', () => {
     })
   })
 
+  it('returns the bounded result of one authorized SSH command', async () => {
+    const runtimeDir = await createRuntimeDir()
+    const { client, paths } = await startCompanion(runtimeDir)
+    const descriptor = JSON.parse(await readFile(paths.descriptorPath, 'utf8'))
+    await pairPeer(runtimeDir, paths.descriptorPath, paths.endpoint, descriptor.pairing_nonce, descriptor.pid, {
+      onRpc: async (request, ctx) => {
+        if (request.method !== 'run_authorized_ssh_command' || request.params.command !== 'ls -la') {
+          return {
+            type: 'rpc_result',
+            request_id: ctx.requestId,
+            lease_epoch: ctx.leaseEpoch,
+            ok: false,
+            error: { code: 'not_approved' },
+          }
+        }
+        return {
+          type: 'rpc_result',
+          request_id: ctx.requestId,
+          lease_epoch: ctx.leaseEpoch,
+          ok: true,
+          result: {
+            status: 'completed',
+            command_class: 'read_only',
+            output: 'files\n',
+            truncated: false,
+          },
+        }
+      },
+    })
+
+    const result = await client.callTool({
+      name: 'run_authorized_ssh_command',
+      arguments: { profile_ref: 'ref-1', command: 'ls -la' },
+    })
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toEqual({
+      status: 'completed',
+      command_class: 'read_only',
+      output: 'files\n',
+      truncated: false,
+    })
+  })
+
   it('cancels in-flight work on abort and ignores late plugin results', async () => {
     const runtimeDir = await createRuntimeDir()
     const { client, paths } = await startCompanion(runtimeDir)
@@ -301,6 +346,7 @@ describe('companion stdio MCP integration', () => {
       'get_ssh_operation_authorization',
       'list_authorized_ssh_profiles',
       'open_authorized_ssh_profile',
+      'run_authorized_ssh_command',
     ])
   }, 15_000)
 

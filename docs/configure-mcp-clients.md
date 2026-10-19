@@ -31,10 +31,10 @@ Companion binary after install:
 
 ## Behavior you should expect
 
-- The server exposes **three tools**: list authorized SSH profiles, open one authorized profile in a visible Tabby SSH tab, and read that profile’s operation grant. There is **no command execution or output streaming** tool.
+- The server exposes **four tools**: list authorized SSH profiles, open one authorized profile in a visible Tabby SSH tab, read that profile’s operation grant, and run one SSH command whose class fits the tier.
 - Starting the companion makes the Tabby plugin request **pairing**; no tool call can succeed until that pairing is approved.
 - The first **open** for a profile shows a **30 second** approval modal in Tabby. Allow remembers that open until you revoke it under **Settings → Secure MCP**, or until the profile’s security projection changes. Timeout, Escape, closing the modal, or Tabby losing focus denies that request and does not store a grant.
-- Operation tiers are chosen only in Tabby and authorize SSH commands: **低级 · 只读**, **中级 · 读写**, and **高级 · 完全控制**. A higher tier includes the SSH commands of every lower tier. `get_ssh_operation_authorization` reports the current tier and that SSH-command policy. It does not change the grant or run a command.
+- Operation tiers are chosen only in Tabby and authorize SSH commands: **低级 · 只读**, **中级 · 读写**, and **高级 · 完全控制**. A higher tier includes the SSH commands of every lower tier. `get_ssh_operation_authorization` reports the current tier and does not change it. `run_authorized_ssh_command` runs one command in a new visible tab when its class fits that tier. Pipes, redirects, command substitution, and newlines are rejected. Returned text is capped at 4096 bytes. A command that reads stdin can consume the completion marker, so the result may time out or come back truncated.
 - Profile listing and grant reads are **read-only**; whitelisting and tier changes happen only in Tabby settings.
 - **Tabby must be running** with the plugin active and the main window holding the companion lease for operations to succeed.
 

@@ -23,6 +23,7 @@ export type AuditEventType =
   | 'list_result'
   | 'open_requested'
   | 'open_result'
+  | 'command_result'
   | 'cancel'
 
 export type AuditResult = 'ok' | 'error'

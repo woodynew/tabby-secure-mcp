@@ -687,6 +687,86 @@ describe('ApprovalGatekeeper', () => {
       await harness.gatekeeper.describeOperationAuthorization(profileRef),
     ).toMatchObject({ ok: true, openSession: false, operationTier: 'none' })
   })
+
+  it('runs one read-only SSH command on a new tab when that tier is granted', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const memory = new FakeAuthorizationMemory()
+    memory.remember('allowed', stableProfileDigest(sshProfile()), {
+      openSession: true,
+      operationTier: 'readonly',
+    })
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+    const commandTab = fakeCommandTab()
+    harness.profilesService.openNewTabForProfile.mockResolvedValue(commandTab.tab)
+
+    const result = await gatekeeper.runAuthorizedSshCommand({
+      requestId: REQUEST_A,
+      leaseEpoch: 1,
+      profileRef,
+      command: 'ls -la',
+      deadlineMonotonicMs: harness.clock.now() + 45_000,
+    })
+
+    expect(result).toMatchObject({
+      ok: true,
+      commandClass: 'read_only',
+      output: 'files\n',
+      truncated: false,
+    })
+    expect(commandTab.sent[0]).toBe('ls -la\r')
+    expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(1)
+    expect(harness.profilesService.sendInput).not.toHaveBeenCalled()
+    expect(harness.presenter.openCalls).toEqual([])
+  })
+
+  it('does not open a tab when the tier or the command shape is not allowed', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const memory = new FakeAuthorizationMemory()
+    memory.remember('allowed', stableProfileDigest(sshProfile()), {
+      openSession: true,
+      operationTier: 'readonly',
+    })
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+
+    expect(
+      await gatekeeper.runAuthorizedSshCommand({
+        requestId: REQUEST_A,
+        leaseEpoch: 1,
+        profileRef,
+        command: 'rm demo',
+        deadlineMonotonicMs: harness.clock.now() + 45_000,
+      }),
+    ).toEqual({ ok: false, code: 'not_approved' })
+    expect(
+      await gatekeeper.runAuthorizedSshCommand({
+        requestId: REQUEST_C,
+        leaseEpoch: 1,
+        profileRef,
+        command: 'ls | head',
+        deadlineMonotonicMs: harness.clock.now() + 45_000,
+      }),
+    ).toEqual({ ok: false, code: 'not_approved' })
+    expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
+
+    const staleMemory = new FakeAuthorizationMemory()
+    staleMemory.remember('allowed', 'stale-digest', {
+      openSession: true,
+      operationTier: 'full',
+    })
+    const staleGatekeeper = gatekeeperWithMemory(harness, staleMemory)
+    expect(
+      await staleGatekeeper.runAuthorizedSshCommand({
+        requestId: REQUEST_B,
+        leaseEpoch: 1,
+        profileRef,
+        command: 'ls',
+        deadlineMonotonicMs: harness.clock.now() + 45_000,
+      }),
+    ).toEqual({ ok: false, code: 'not_approved' })
+    expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
+  })
 })
 
 class FakeAuthorizationMemory implements AuthorizationMemory {
@@ -709,6 +789,36 @@ class FakeAuthorizationMemory implements AuthorizationMemory {
     }
     const current = this.effectiveGrant(profileId, profileDigest)
     this.remember(profileId, profileDigest, { ...current, openSession: true })
+  }
+}
+
+function fakeCommandTab(): { tab: object; sent: string[] } {
+  const sent: string[] = []
+  const listeners: Array<(chunk: string) => void> = []
+  return {
+    sent,
+    tab: {
+      session: { open: true },
+      frontendReady$: { subscribe: () => ({ unsubscribe() {} }) },
+      output$: {
+        subscribe(observer: { next?: (value: string) => void }) {
+          if (observer.next) {
+            listeners.push(observer.next)
+          }
+          return { unsubscribe() {} }
+        },
+      },
+      sendInput(data: string) {
+        sent.push(data)
+        const marker = data.match(/'(__tabby_secure_mcp_[0-9a-f]+__)'/)?.[1]
+        if (!marker) {
+          return
+        }
+        for (const listener of listeners) {
+          listener(`files\n${marker}\n`)
+        }
+      },
+    },
   }
 }
 

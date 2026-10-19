@@ -34,7 +34,9 @@
 2. `open_authorized_ssh_profile`：经一次性审批后打开可见 SSH 标签页；
 3. 不执行任意命令，不读取或回传终端输出。
 
-后续增加只读工具 `get_ssh_operation_authorization`：查询 Tabby 设置里的永久打开记忆，以及已授权的 SSH 命令等级（只读、读写、完全控制）。它不执行命令，也不能由客户端修改授权。
+后续增加只读工具 `get_ssh_operation_authorization`：查询 Tabby 设置里的永久打开记忆，以及已授权的 SSH 命令等级（只读、读写、完全控制）。客户端不能修改授权。
+
+`run_authorized_ssh_command` 只执行一条 SSH 命令。命令按程序名分成只读、读写或完全控制，必须落在该 profile 已保存的等级内；更高一级包含更低一级。分号、管道、重定向、命令替换和换行会被拒绝。执行发生在新的可见 SSH 标签页，回传文本有上限。这不是任意 shell，也不是按参数模板逐条审批。
 
 ## 2. 评审边界与攻击者模型
 
@@ -73,8 +75,8 @@
 | 独立设置页 | 可直接采用 | 继承 `SettingsTabProvider`，在 `getComponentType()` 返回设置组件，并以 `multi: true` 注册。 |
 | `PlatformService.showMessageBox()` | 仅适合简单确认 | API 存在，但不提供倒计时和丰富内容布局。30 秒 Default Deny 应使用 `NgbModal.open()` 的自定义组件实现。 |
 | `SessionsService.createSession()` | 不可采用 | 当前没有此通用公开 API。应调用 `ProfilesService.openNewTabForProfile(profile)`。 |
-| 向 SSH 标签页发送输入 | 后续阶段可用 | 等待 terminal frontend 就绪后使用 `BaseTerminalTabComponent.sendInput()`；不要直接写底层 session。 |
-| 捕获 SSH 输出 | 后续阶段可用但高风险 | `output$`/`binaryOutput$` 只提供订阅后的输出，没有历史重放。应使用 `TerminalDecorator` 建立显式 registry，并严格限制订阅生命周期。 |
+| 向 SSH 标签页发送输入 | 单条命令已使用 | 只对 `openNewTabForProfile` 打开的专用标签页调用 `sendInput()`。等待 `session.open` 后再写。不写底层 session，也不写用户已有标签页。 |
+| 捕获 SSH 输出 | 单条命令已使用，范围受限 | 只订阅这次命令开始之后的 `output$`。没有历史重放。完成后退订。不使用 `AppService.activeTab`。 |
 | 从 `AppService.activeTab` 取得终端 | 不可依赖 | 活动标签可能是 split 容器；应使用 focused tab 或 decorator registry。 |
 | 每个 Tabby 应用只启动一台服务 | 需要额外设计 | 每个窗口都会加载插件并拥有自己的 Angular service。`BootstrapData.isMainWindow` 可用于限制主窗口启动，但主窗口关闭后的接管没有稳健公开 API。 |
 
@@ -249,9 +251,11 @@ host、port、username、group、SSH jump host 或配置来源；如业务确实
 - 终端可能处于编辑器、交互程序、密码提示或另一条命令中，盲目 `sendInput()` 会造成混淆；
 - 审批后 profile、当前目录、远端用户或 shell 状态可能已改变。
 
-这三个等级授权的是 SSH 命令，由 `evaluateStructuredOperation` 按命令类别判定：低级授权只读 SSH 命令，中级授权读写 SSH 命令，高级授权完全控制 SSH 命令。较高一级包含全部更低级别的 SSH 命令。本阶段把该授权持久化在 Tabby 配置中，MCP 通过 `get_ssh_operation_authorization` 读取当前级别；尚未按单条命令执行。profile 安全投影变化后，打开记忆和操作级别一并失效，直到用户重新允许打开或在设置中重新保存。
+这三个等级授权的是 SSH 命令，由 `evaluateStructuredOperation` 按命令类别判定：低级授权只读 SSH 命令，中级授权读写 SSH 命令，高级授权完全控制 SSH 命令。较高一级包含全部更低级别的 SSH 命令。授权持久化在 Tabby 配置中。profile 安全投影变化后，打开记忆和操作级别一并失效，直到用户重新允许打开或在设置中重新保存。
 
-若后续确有自动化需求，只增加结构化工具：
+`run_authorized_ssh_command` 接受一条命令行，并按裸程序名归入只读、读写或完全控制。程序名里出现 `/` 时一律视为完全控制，因此 `/bin/ls` 不能用只读等级运行。Shell 组合符会被拒绝。等级不足、没有授权或投影过期都返回 `not_approved`，并且不会打开标签页。通过后打开专用可见标签页，发送这一条命令，再发送插件自己的完成标记。打开之后、发送之前会再读一次 profile，投影变化则不发送。审计事件是 `command_result`，不记录命令原文或输出。
+
+更细的参数模板仍不在本工具里。若以后要按参数模板审批，再增加结构化工具：
 
 ```ts
 interface ApprovedOperationRequest {
@@ -271,12 +275,12 @@ schema、渲染方式、允许的远端用户、超时、最大输出和是否�
 
 ### 5.5 输出处理
 
-首版不读取终端输出。后续阶段即使执行结构化操作，也采用以下顺序：
+`run_authorized_ssh_command` 只采集这一次命令在专用可见标签页上的输出，顺序如下：
 
 1. 为操作创建专用、可见的终端上下文，不从用户已有交互会话抓取历史；
 2. 仅订阅该操作开始后的输出，并在完成、取消、超时或 tab 关闭时立即退订；
-3. 默认上限建议为 30 秒和 64 KiB UTF-8 文本，先到即停止并返回 `truncated: true`；
-4. 去除 ANSI 控制序列并标记无效 UTF-8；二进制输出不回传；
+3. 上限是 45 秒和 4096 字节 UTF-8。没有完成标记且没有任何输出时返回 `expired`；有部分输出但没有标记，或达到字节上限，返回截断结果；
+4. 去除 ANSI 控制序列；二进制输出不回传。实现不承诺密钥脱敏；
 5. 私钥块、常见 access token 和显式密码字段的脱敏作为纵深防御；
 6. 对不能可靠识别的秘密不作“已安全脱敏”承诺；
 7. 输出不进入审批日志，除非用户另行启用经过说明的诊断模式。
@@ -420,7 +424,7 @@ IPC 基线：
 | 推荐用途 | PoC 或兼容 fallback | 正式 MVP |
 
 正式 MVP 选择选项 B。选项 A 只保留为显式启用的兼容 fallback，并且不得与 stdio
-模式同时默认开启。首版 companion 和插件都不引入任意命令执行。
+模式同时默认开启。任意 shell 字符串仍然拒绝。已实现的远程执行只有一条已分级的 SSH 命令。
 
 ## 7. 推荐数据流
 
@@ -475,7 +479,7 @@ sequenceDiagram
 | HTTP 慢请求 | header 与 body 各 5 秒 deadline；超时关闭 |
 | HTTP 并发连接 | 全局最多 16 个 |
 | HTTP 认证失败 | 全局每分钟最多 5 次；超限 60 秒内返回 429 |
-| 后续阶段输出 | 30 秒或 64 KiB，先到即停止 |
+| 单条命令输出 | 45 秒或 4096 字节，先到即停止 |
 | 审计文件 | 单文件最大 10 MiB 后轮换，并保留链连续性 |
 
 这些限值控制资源消耗，不形成 timing side-channel 不存在的证明。未知、过期、未授权和
@@ -484,8 +488,8 @@ sequenceDiagram
 ### 8.2 开始实现前
 
 - [ ] 接受选项 B 作为正式 MVP 架构；HTTP 只作为后续显式 fallback。
-- [ ] 冻结首版工具集为 `list_authorized_ssh_profiles` 与
-      `open_authorized_ssh_profile`，工具列表中不存在通用命令、终端读取、文件传输或端口转发。
+- [ ] 工具集保持为列表、打开、读取 SSH 命令等级，以及 `run_authorized_ssh_command`。
+      不提供任意 shell、文件传输或端口转发。
 - [ ] 明确支持的最低 Tabby 版本和各目标 MCP 客户端版本，CI 使用相同版本测试。
 - [ ] 固定 Node、Angular、Tabby peer package 与 MCP SDK 版本，提交 lockfile。
 - [ ] 为 companion、IPC、Gatekeeper、设置页和审计分别定义独立接口；完整 Tabby profile
@@ -573,8 +577,8 @@ HTTP 模式默认关闭。任何发布版本若提供该选项，必须额外验
   哈希链可靠发现；
 - Unix 权限和 Windows ACL 符合当前用户专属要求；
 - 日志写满、磁盘只读、时钟回拨和进程崩溃不会产生“已批准但无决定记录”的操作；
-- 首版没有 terminal output 订阅。后续引入输出时，另行验证 30 秒、64 KiB、退订、
-  截断标志、ANSI 清理和脱敏 canary。
+- 单条命令的输出订阅在结束时退订，并验证 45 秒、4096 字节、截断标志和 ANSI 清理。
+  不承诺密钥脱敏。
 
 ### 8.8 客户端兼容矩阵
 
@@ -589,7 +593,7 @@ HTTP 模式默认关闭。任何发布版本若提供该选项，必须额外验
 | 用户拒绝/超时得到安全错误 | 必须 | 必须 | 必须 | 必须 |
 | MCP 取消能关闭审批 | 必须 | 必须 | 必须 | 必须 |
 | companion 重启后恢复配对 | 必须 | 必须 | 必须 | 必须 |
-| 工具 schema 不含命令/输出能力 | 必须 | 必须 | 必须 | 必须 |
+| 工具 schema 只有一条已分级 SSH 命令，没有任意 shell、文件传输或端口转发 | 必须 | 必须 | 必须 | 必须 |
 
 如果某客户端不能满足取消或重连语义，应在该版本上标记为不支持，而不是通过放宽审批
 或复用旧授权来兼容。
@@ -611,7 +615,7 @@ HTTP 模式默认关闭。任何发布版本若提供该选项，必须额外验
 | 原伪代码能否直接实现？ | 不能。Session API、倒计时 modal、SDK imports、transport 与多窗口生命周期均需重写。 |
 | 能否称为“底层强隔离”？ | 不能。Tabby 插件共享高权限 renderer，同用户 companion 默认也不是 sandbox。 |
 | loopback + Token 是否足够？ | 不够。还需 `Host`/`Origin`、分发轮换、解析上限、速率限制和客户端实测。 |
-| 任意命令 + 人工确认是否适合首版？ | 不适合。首版只列授权引用并打开可见会话。 |
+| 任意命令 + 人工确认是否适合？ | 不适合。当前只允许一条已分级的 SSH 命令，并拒绝 shell 组合符。 |
 | 推荐架构是什么？ | 薄 Tabby plugin + stdio companion + 用户专属 IPC + 一次性审批。 |
 | 何时可以进入实现？ | 接受第 6.4 节决策与第 8.2 节范围后，可单独制定 MVP 实施计划。 |
 

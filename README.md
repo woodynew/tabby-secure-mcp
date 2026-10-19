@@ -1,6 +1,6 @@
 # tabby-secure-mcp
 
-Thin Tabby plugin plus stdio MCP companion that exposes a minimal, approval-gated view of authorized SSH profiles. Untrusted MCP clients can list whitelisted profiles and request opening a visible Tabby SSH tab; they cannot run commands, read terminal output, or access non-whitelisted profiles.
+Thin Tabby plugin plus stdio MCP companion that exposes a minimal, approval-gated view of authorized SSH profiles. Untrusted MCP clients can list whitelisted profiles, open a visible Tabby SSH tab, and run one SSH command whose class fits the stored tier. They cannot run a shell pipeline, read an existing tab, or access non-whitelisted profiles.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ flowchart LR
 ```
 
 - **`packages/tabby-plugin`** (`tabby-secure-mcp`) — Angular Tabby plugin: settings whitelist, pairing UI, 30s open approvals, lease-aware IPC to the companion, audit log.
-- **`packages/companion`** (`@tabby-secure-mcp/companion`) — Node stdio MCP server with three tools; connects outbound to the plugin.
+- **`packages/companion`** (`@tabby-secure-mcp/companion`) — Node stdio MCP server with four tools; connects outbound to the plugin.
 - **`packages/ipc-contract`** — Shared framed IPC schema and limits.
 
 See the [security feasibility review](docs/tabby-secure-mcp-security-feasibility-review.md) for threat model, trust boundaries, and design rationale.
@@ -49,7 +49,7 @@ See the [security feasibility review](docs/tabby-secure-mcp-security-feasibility
 
 - Protection is **application-layer least privilege** inside the Tabby + OS user trust domain, not kernel-level isolation between Tabby plugins.
 - Other Tabby plugins and same-user processes are out of scope for strong isolation.
-- MCP tools are **read-only profile listing**, **open in Tabby**, and **read the operation grant**. There is no remote command or output tool.
+- MCP tools are **read-only profile listing**, **open in Tabby**, **read the operation grant**, and **run one SSH command**. The command runs in a new visible tab. Shell operators are rejected, and the returned text is capped at 4096 bytes.
 - The first open of a profile still requires a 30-second approval. Allow stores a permanent open grant until it is revoked in Secure MCP settings or the profile security projection changes.
 - Operation tiers authorize **SSH commands**. **Low** authorizes read-only commands, **medium** authorizes read-write commands, and **high** authorizes full-control commands. A higher tier includes every lower command class. The MCP client cannot raise its own tier.
 - Pairing is still required. Open approvals that are not already remembered expire after 30 seconds and are single-use.

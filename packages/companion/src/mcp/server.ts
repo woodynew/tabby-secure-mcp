@@ -101,6 +101,34 @@ export function createMcpServer(gateway: PluginGateway): McpServer {
     },
   )
 
+  server.registerTool(
+    'run_authorized_ssh_command',
+    {
+      description:
+        'Run one SSH command on an authorized profile. The command class must fit the Tabby tier: read-only, read-write, or full control. Shell operators are rejected.',
+      inputSchema: z.strictObject({
+        profile_ref: z.string().min(1).max(256),
+        command: z.string().min(1).max(512),
+      }),
+      outputSchema: z.object({
+        status: z.enum(['completed', 'truncated']),
+        command_class: z.enum(['read_only', 'read_write', 'full_control']),
+        output: z.string(),
+        truncated: z.boolean(),
+      }),
+    },
+    async ({ profile_ref, command }, ctx) => {
+      const result = await gateway.call(
+        { method: 'run_authorized_ssh_command', params: { profile_ref, command } },
+        { signal: ctx.mcpReq.signal, deadlineMs: Math.max(readDeadlineMs(), 45_000) },
+      )
+      if (!result.ok) {
+        return toMcpToolError(result.code)
+      }
+      return toMcpToolSuccess(result.result)
+    },
+  )
+
   return server
 }
 

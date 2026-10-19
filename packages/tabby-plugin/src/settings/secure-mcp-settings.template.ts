@@ -2,13 +2,14 @@ export const secureMcpSettingsTemplate = `
     <h3>Authorized SSH profiles</h3>
     <p class="text-muted">
       Select which non-built-in SSH profiles MCP may use. Credentials, hostnames, usernames, groups,
-      profile options, and terminal output are never exposed outside Tabby.
+      and profile options are never exposed outside Tabby. Output from an existing tab is not read.
     </p>
     <p class="text-muted">
       Allowing an open remembers it until you revoke it here. Operation tiers authorize SSH commands
       and are managed only in Tabby. Low authorizes read-only SSH commands, medium authorizes
       read-write SSH commands, and high authorizes full-control SSH commands. A higher tier includes
-      every lower command class. The MCP client cannot raise its own tier.
+      every lower command class. A command whose class fits the tier runs once in a new visible tab.
+      Shell operators are rejected, and the returned text is capped. The MCP client cannot raise its own tier.
     </p>
 
     <div *ngIf="loading">Loading SSH profiles…</div>

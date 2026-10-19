@@ -104,7 +104,7 @@ function createRuntime(options: {
       },
     },
   )
-  return { runtime, leaseState, authorizedProfiles, gatekeeper }
+  return { runtime, leaseState, authorizedProfiles, gatekeeper, audit }
 }
 
 describe('PluginRuntimeService', () => {
@@ -251,6 +251,67 @@ describe('PluginRuntimeService', () => {
         ],
       },
     })
+    runtime.destroy()
+  })
+
+  it('returns one SSH command result and audits it without the command text', async () => {
+    const harness = await startGatewayHarness()
+    closers.push(() => harness.close())
+    const base = await mkdtemp(path.join(tmpdir(), 'plugin-rt-'))
+    const descriptorPath = path.join(base, 'descriptor.json')
+    const descriptorBody = `${JSON.stringify({
+      protocol_version: 1,
+      endpoint: harness.endpoint,
+      pid: harness.pid,
+      expires_at: Date.now() + 60_000,
+      pairing_nonce: harness.pairingNonce,
+    })}\n`
+    const { runtime, gatekeeper, audit } = createRuntime({
+      descriptorPath,
+      descriptorBody,
+    })
+    const ran = vi.spyOn(gatekeeper, 'runAuthorizedSshCommand').mockResolvedValue({
+      ok: true,
+      commandClass: 'read_only',
+      output: 'files\n',
+      truncated: false,
+    })
+    const appended = vi.spyOn(audit, 'safeAppend')
+    runtime.start()
+    await vi.waitFor(
+      () => {
+        expect(runtime.isHolder()).toBe(true)
+      },
+      { timeout: 5_000 },
+    )
+
+    const result = await harness.gateway.call({
+      method: 'run_authorized_ssh_command',
+      params: { profile_ref: 'ffffffffffffffffffffffffffffffff', command: 'ls -la' },
+    })
+
+    expect(ran).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileRef: 'ffffffffffffffffffffffffffffffff',
+        command: 'ls -la',
+      }),
+    )
+    const deadline = ran.mock.calls[0]?.[0].deadlineMonotonicMs ?? 0
+    expect(deadline).toBeGreaterThan(45_000)
+    expect(result).toEqual({
+      ok: true,
+      method: 'run_authorized_ssh_command',
+      result: {
+        status: 'completed',
+        command_class: 'read_only',
+        output: 'files\n',
+        truncated: false,
+      },
+    })
+    expect(appended).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'command_result', result: 'ok' }),
+    )
+    expect(JSON.stringify(appended.mock.calls)).not.toMatch(/ls -la/)
     runtime.destroy()
   })
 

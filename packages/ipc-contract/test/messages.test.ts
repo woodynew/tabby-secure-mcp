@@ -91,6 +91,12 @@ describe('version 1 IPC schemas', () => {
       }).success,
     ).toBe(true)
     expect(
+      operationalRequestSchema.safeParse({
+        method: 'run_authorized_ssh_command',
+        params: { profile_ref: 'profile-1', command: 'ls -la' },
+      }).success,
+    ).toBe(true)
+    expect(
       operationalRequestSchema.safeParse({ method: 'run_command', params: {} }).success,
     ).toBe(false)
   })

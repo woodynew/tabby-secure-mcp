@@ -27,6 +27,7 @@ export type OperationalRequest =
   | { method: 'list_authorized_ssh_profiles'; params: Record<string, never> }
   | { method: 'open_authorized_ssh_profile'; params: { profile_ref: string } }
   | { method: 'get_ssh_operation_authorization'; params: { profile_ref: string } }
+  | { method: 'run_authorized_ssh_command'; params: { profile_ref: string; command: string } }
 
 export type IpcMessage =
   | {

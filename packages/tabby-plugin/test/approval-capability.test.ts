@@ -19,6 +19,7 @@ function readProductionSources(): string {
     'approval/pairing-approval-modal.component.ts',
     'authorization/operation-tier-policy.ts',
     'authorization/permanent-authorization-store.ts',
+    'authorization/ssh-command.ts',
     'services/authorized-profiles.service.ts',
     'runtime/plugin-runtime-service.ts',
     'audit/audit-service.ts',

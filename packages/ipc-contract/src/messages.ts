@@ -102,11 +102,20 @@ export const getSshOperationAuthorizationRequestSchema = z.strictObject({
   }),
 })
 
+export const runAuthorizedSshCommandRequestSchema = z.strictObject({
+  method: z.literal('run_authorized_ssh_command'),
+  params: z.strictObject({
+    profile_ref: identifier,
+    command: boundedString.min(1).max(512),
+  }),
+})
+
 export const operationalRequestSchema = secureSchema(
   z.discriminatedUnion('method', [
     listAuthorizedSshProfilesRequestSchema,
     openAuthorizedSshProfileRequestSchema,
     getSshOperationAuthorizationRequestSchema,
+    runAuthorizedSshCommandRequestSchema,
   ]),
 )
 export type OperationalRequest = z.infer<typeof operationalRequestSchema>
@@ -219,10 +228,18 @@ export const operationAuthorizationRpcResultSchema = z.strictObject({
     .max(3),
 })
 
+export const sshCommandRpcResultSchema = z.strictObject({
+  status: z.enum(['completed', 'truncated']),
+  command_class: sshCommandClassSchema,
+  output: boundedString.max(4096),
+  truncated: z.boolean(),
+})
+
 export const rpcSuccessResultSchema = z.union([
   listProfilesRpcResultSchema,
   openProfileRpcResultSchema,
   operationAuthorizationRpcResultSchema,
+  sshCommandRpcResultSchema,
 ])
 
 const rpcSuccessSchema = z.strictObject({
