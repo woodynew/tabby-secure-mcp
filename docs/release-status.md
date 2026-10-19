@@ -7,7 +7,7 @@
 | Linux Tabby GUI | **Manually validated on Tabby 1.0.238** for the original whitelist, pairing, and open flow. The later permanent-grant settings have automated coverage and have not been re-certified in the Tabby window. |
 | macOS Tabby GUI | **Not GUI-certified** — automated cross-platform tests only. Real Tabby window acceptance is deferred. |
 | Windows Tabby GUI | **Not GUI-certified** — automated cross-platform tests only. Real Tabby window acceptance is deferred. |
-| Permanent open memory and operation tiers | Implemented. Approving an open stores a permanent open grant. Settings manage none / readonly / readwrite / full. `get_ssh_operation_authorization` is read-only. This phase does not execute remote commands. |
+| Permanent open memory and SSH command tiers | Implemented. Approving an open stores a permanent open grant. Settings manage none / readonly / readwrite / full as SSH command classes. `get_ssh_operation_authorization` reports that grant. Per-command execution is not in this phase. |
 
 Do not treat CI green on macOS/Windows as proof of Tabby UI behavior until the corresponding GUI validation tasks complete.
 

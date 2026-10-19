@@ -206,14 +206,14 @@ describe('companion stdio MCP integration', () => {
     })
   })
 
-  it('returns the stored operation tier without accepting a command', async () => {
+  it('reports the authorized SSH command class', async () => {
     const runtimeDir = await createRuntimeDir()
     const { client, paths } = await startCompanion(runtimeDir)
     const descriptor = JSON.parse(await readFile(paths.descriptorPath, 'utf8'))
     const policy = [
-      { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
-      { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
-      { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+      { tier: 'readonly', rank: 1, label: '低级 · 只读', subject: 'ssh_command', effect: 'read_only' },
+      { tier: 'readwrite', rank: 2, label: '中级 · 读写', subject: 'ssh_command', effect: 'read_write' },
+      { tier: 'full', rank: 3, label: '高级 · 完全控制', subject: 'ssh_command', effect: 'full_control' },
     ]
     await pairPeer(runtimeDir, paths.descriptorPath, paths.endpoint, descriptor.pairing_nonce, descriptor.pid, {
       onRpc: async (request, ctx) => {
@@ -235,6 +235,7 @@ describe('companion stdio MCP integration', () => {
             profile_ref: request.params.profile_ref,
             open_session: false,
             operation_tier: 'readonly',
+            authorizes: 'ssh_command',
             policy,
           },
         }
@@ -250,6 +251,7 @@ describe('companion stdio MCP integration', () => {
       profile_ref: 'ref-1',
       open_session: false,
       operation_tier: 'readonly',
+      authorizes: 'ssh_command',
       policy,
     })
   })

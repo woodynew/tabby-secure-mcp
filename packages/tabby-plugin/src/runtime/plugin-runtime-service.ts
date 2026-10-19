@@ -10,6 +10,7 @@ import {
   type IpcMessage,
 } from './ipc-contract-api'
 
+import { SSH_COMMAND_AUTHORIZATION_SUBJECT } from '../authorization/operation-tier-policy'
 import { AuditService } from '../audit/audit-service'
 import {
   ApprovalGatekeeper,
@@ -486,10 +487,12 @@ export class PluginRuntimeService {
           profile_ref: described.profileRef,
           open_session: described.openSession,
           operation_tier: described.operationTier,
+          authorizes: SSH_COMMAND_AUTHORIZATION_SUBJECT,
           policy: described.policy.map(entry => ({
             tier: entry.tier,
             rank: entry.rank,
             label: entry.label,
+            subject: entry.subject,
             effect: entry.effect,
           })),
         },

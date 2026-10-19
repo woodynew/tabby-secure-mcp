@@ -5,9 +5,10 @@ export const secureMcpSettingsTemplate = `
       profile options, and terminal output are never exposed outside Tabby.
     </p>
     <p class="text-muted">
-      Allowing an open remembers it until you revoke it here. Operation tiers are managed only in
-      Tabby: low is read-only, medium is read-write, and high is full control. Full control is not a
-      remote shell. The MCP client cannot raise its own tier.
+      Allowing an open remembers it until you revoke it here. Operation tiers authorize SSH commands
+      and are managed only in Tabby. Low authorizes read-only SSH commands, medium authorizes
+      read-write SSH commands, and high authorizes full-control SSH commands. A higher tier includes
+      every lower command class. The MCP client cannot raise its own tier.
     </p>
 
     <div *ngIf="loading">Loading SSH profiles…</div>

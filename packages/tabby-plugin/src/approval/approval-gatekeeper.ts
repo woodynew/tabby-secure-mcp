@@ -66,7 +66,10 @@ export type PairingApprovalResult = { ok: true; approved: true } | { ok: false; 
 
 export type LeaseEpochSource = () => number | null
 
-export type PublicOperationTierPolicy = Pick<OperationTierPolicy, 'tier' | 'rank' | 'label' | 'effect'>
+export type PublicOperationTierPolicy = Pick<
+  OperationTierPolicy,
+  'tier' | 'rank' | 'label' | 'subject' | 'effect'
+>
 
 export type OperationAuthorizationDescription =
   | {

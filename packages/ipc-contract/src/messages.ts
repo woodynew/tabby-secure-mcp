@@ -199,17 +199,21 @@ export const openProfileRpcResultSchema = z.strictObject({
 
 export const operationTierSchema = z.enum(['none', 'readonly', 'readwrite', 'full'])
 
+export const sshCommandClassSchema = z.enum(['read_only', 'read_write', 'full_control'])
+
 export const operationAuthorizationRpcResultSchema = z.strictObject({
   profile_ref: identifier,
   open_session: z.boolean(),
   operation_tier: operationTierSchema,
+  authorizes: z.literal('ssh_command'),
   policy: z
     .array(
       z.strictObject({
         tier: z.enum(['readonly', 'readwrite', 'full']),
         rank: z.number().int().min(1).max(3),
         label: boundedString.min(1).max(64),
-        effect: z.enum(['read_only', 'read_write', 'full_control']),
+        subject: z.literal('ssh_command'),
+        effect: sshCommandClassSchema,
       }),
     )
     .max(3),

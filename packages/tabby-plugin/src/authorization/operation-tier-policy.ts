@@ -4,13 +4,19 @@ export type OperationTier = (typeof OPERATION_TIERS)[number]
 
 export type GrantedOperationTier = 'none' | OperationTier
 
-export type StructuredOperationClass = 'read_only' | 'read_write' | 'full_control'
+/** Class of SSH command authorized by a tier. A higher tier includes every lower class. */
+export type SshCommandClass = 'read_only' | 'read_write' | 'full_control'
+
+export type StructuredOperationClass = SshCommandClass
+
+export const SSH_COMMAND_AUTHORIZATION_SUBJECT = 'ssh_command' as const
 
 export interface OperationTierPolicy {
   tier: OperationTier
   rank: number
   label: string
-  effect: StructuredOperationClass
+  subject: typeof SSH_COMMAND_AUTHORIZATION_SUBJECT
+  effect: SshCommandClass
   permits: readonly string[]
   denies: readonly string[]
 }
@@ -20,25 +26,28 @@ export const OPERATION_TIER_POLICY: readonly OperationTierPolicy[] = [
     tier: 'readonly',
     rank: 1,
     label: '低级 · 只读',
+    subject: SSH_COMMAND_AUTHORIZATION_SUBJECT,
     effect: 'read_only',
-    permits: ['inspect remote state', 'read file contents', 'list directories'],
-    denies: ['create, modify, or delete files', 'install software', 'change services', 'run a shell string'],
+    permits: ['read-only SSH commands'],
+    denies: ['read-write SSH commands', 'full-control SSH commands'],
   },
   {
     tier: 'readwrite',
     rank: 2,
     label: '中级 · 读写',
+    subject: SSH_COMMAND_AUTHORIZATION_SUBJECT,
     effect: 'read_write',
-    permits: ['read-only operations', 'create or update a declared file target'],
-    denies: ['recursive delete', 'package or service control', 'run a shell string'],
+    permits: ['read-only SSH commands', 'read-write SSH commands'],
+    denies: ['full-control SSH commands'],
   },
   {
     tier: 'full',
     rank: 3,
     label: '高级 · 完全控制',
+    subject: SSH_COMMAND_AUTHORIZATION_SUBJECT,
     effect: 'full_control',
-    permits: ['read-write operations', 'structured system changes declared by a later operation schema'],
-    denies: ['raw shell strings', 'implicit sudo, interpreters, port forwards, or file transfer'],
+    permits: ['read-only SSH commands', 'read-write SSH commands', 'full-control SSH commands'],
+    denies: [],
   },
 ]
 
@@ -92,12 +101,13 @@ export function evaluateStructuredOperation(input: {
 }
 
 export function publicOperationTierPolicy(): Array<
-  Pick<OperationTierPolicy, 'tier' | 'rank' | 'label' | 'effect'>
+  Pick<OperationTierPolicy, 'tier' | 'rank' | 'label' | 'subject' | 'effect'>
 > {
-  return OPERATION_TIER_POLICY.map(({ tier, rank, label, effect }) => ({
+  return OPERATION_TIER_POLICY.map(({ tier, rank, label, subject, effect }) => ({
     tier,
     rank,
     label,
+    subject,
     effect,
   }))
 }

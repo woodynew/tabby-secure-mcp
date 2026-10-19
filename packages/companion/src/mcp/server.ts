@@ -69,7 +69,7 @@ export function createMcpServer(gateway: PluginGateway): McpServer {
     'get_ssh_operation_authorization',
     {
       description:
-        'Read the permanent SSH operation tier stored in Tabby. This does not execute a command or change the grant.',
+        'Read which class of SSH commands Tabby has authorized for a profile: read-only, read-write, or full control. This does not run a command or change the grant.',
       inputSchema: z.strictObject({
         profile_ref: z.string().min(1).max(256),
       }),
@@ -77,11 +77,13 @@ export function createMcpServer(gateway: PluginGateway): McpServer {
         profile_ref: z.string(),
         open_session: z.boolean(),
         operation_tier: z.enum(['none', 'readonly', 'readwrite', 'full']),
+        authorizes: z.literal('ssh_command'),
         policy: z.array(
           z.object({
             tier: z.enum(['readonly', 'readwrite', 'full']),
             rank: z.number(),
             label: z.string(),
+            subject: z.literal('ssh_command'),
             effect: z.enum(['read_only', 'read_write', 'full_control']),
           }),
         ),

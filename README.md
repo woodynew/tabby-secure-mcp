@@ -51,7 +51,7 @@ See the [security feasibility review](docs/tabby-secure-mcp-security-feasibility
 - Other Tabby plugins and same-user processes are out of scope for strong isolation.
 - MCP tools are **read-only profile listing**, **open in Tabby**, and **read the operation grant**. There is no remote command or output tool.
 - The first open of a profile still requires a 30-second approval. Allow stores a permanent open grant until it is revoked in Secure MCP settings or the profile security projection changes.
-- Operation tiers are **low / read-only**, **medium / read-write**, and **high / full control**. A higher tier covers every lower class. Full control is not a raw shell, implicit sudo, interpreter, port forward, or file transfer. The MCP client cannot raise its own tier.
+- Operation tiers authorize **SSH commands**. **Low** authorizes read-only commands, **medium** authorizes read-write commands, and **high** authorizes full-control commands. A higher tier includes every lower command class. The MCP client cannot raise its own tier.
 - Pairing is still required. Open approvals that are not already remembered expire after 30 seconds and are single-use.
 - Local audit JSONL is hash-chained but cannot detect wholesale log replacement.
 

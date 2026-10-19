@@ -217,9 +217,9 @@ describe('PluginRuntimeService', () => {
       openSession: true,
       operationTier: 'readonly',
       policy: [
-        { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
-        { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
-        { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+        { tier: 'readonly', rank: 1, label: '低级 · 只读', subject: 'ssh_command', effect: 'read_only' },
+        { tier: 'readwrite', rank: 2, label: '中级 · 读写', subject: 'ssh_command', effect: 'read_write' },
+        { tier: 'full', rank: 3, label: '高级 · 完全控制', subject: 'ssh_command', effect: 'full_control' },
       ],
     })
     runtime.start()
@@ -243,10 +243,11 @@ describe('PluginRuntimeService', () => {
         profile_ref: 'ffffffffffffffffffffffffffffffff',
         open_session: true,
         operation_tier: 'readonly',
+        authorizes: 'ssh_command',
         policy: [
-          { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
-          { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
-          { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+          { tier: 'readonly', rank: 1, label: '低级 · 只读', subject: 'ssh_command', effect: 'read_only' },
+          { tier: 'readwrite', rank: 2, label: '中级 · 读写', subject: 'ssh_command', effect: 'read_write' },
+          { tier: 'full', rank: 3, label: '高级 · 完全控制', subject: 'ssh_command', effect: 'full_control' },
         ],
       },
     })

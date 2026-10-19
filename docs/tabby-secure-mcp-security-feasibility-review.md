@@ -34,7 +34,7 @@
 2. `open_authorized_ssh_profile`：经一次性审批后打开可见 SSH 标签页；
 3. 不执行任意命令，不读取或回传终端输出。
 
-后续增加只读工具 `get_ssh_operation_authorization`：查询 Tabby 设置里的永久打开记忆和三级操作策略。它不执行命令，也不能由客户端修改授权。
+后续增加只读工具 `get_ssh_operation_authorization`：查询 Tabby 设置里的永久打开记忆，以及已授权的 SSH 命令等级（只读、读写、完全控制）。它不执行命令，也不能由客户端修改授权。
 
 ## 2. 评审边界与攻击者模型
 
@@ -249,7 +249,7 @@ host、port、username、group、SSH jump host 或配置来源；如业务确实
 - 终端可能处于编辑器、交互程序、密码提示或另一条命令中，盲目 `sendInput()` 会造成混淆；
 - 审批后 profile、当前目录、远端用户或 shell 状态可能已改变。
 
-当前阶段只持久化三级授权策略，不执行远端命令：低级只读、中级读写、高级完全控制。较高一级覆盖其自身和全部更低级别。高级完全控制仍不表示原始 shell、隐式 sudo、解释器、端口转发或文件传输。策略由 `evaluateStructuredOperation` 判定；MCP 只能通过 `get_ssh_operation_authorization` 读取当前级别和静态策略。profile 安全投影变化后，打开记忆和操作级别一并失效，直到用户重新允许打开或在设置中重新保存。
+这三个等级授权的是 SSH 命令，由 `evaluateStructuredOperation` 按命令类别判定：低级授权只读 SSH 命令，中级授权读写 SSH 命令，高级授权完全控制 SSH 命令。较高一级包含全部更低级别的 SSH 命令。本阶段把该授权持久化在 Tabby 配置中，MCP 通过 `get_ssh_operation_authorization` 读取当前级别；尚未按单条命令执行。profile 安全投影变化后，打开记忆和操作级别一并失效，直到用户重新允许打开或在设置中重新保存。
 
 若后续确有自动化需求，只增加结构化工具：
 
