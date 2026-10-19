@@ -65,6 +65,40 @@ export function createMcpServer(gateway: PluginGateway): McpServer {
     },
   )
 
+  server.registerTool(
+    'get_ssh_operation_authorization',
+    {
+      description:
+        'Read the permanent SSH operation tier stored in Tabby. This does not execute a command or change the grant.',
+      inputSchema: z.strictObject({
+        profile_ref: z.string().min(1).max(256),
+      }),
+      outputSchema: z.object({
+        profile_ref: z.string(),
+        open_session: z.boolean(),
+        operation_tier: z.enum(['none', 'readonly', 'readwrite', 'full']),
+        policy: z.array(
+          z.object({
+            tier: z.enum(['readonly', 'readwrite', 'full']),
+            rank: z.number(),
+            label: z.string(),
+            effect: z.enum(['read_only', 'read_write', 'full_control']),
+          }),
+        ),
+      }),
+    },
+    async ({ profile_ref }, ctx) => {
+      const result = await gateway.call(
+        { method: 'get_ssh_operation_authorization', params: { profile_ref } },
+        { signal: ctx.mcpReq.signal, deadlineMs: readDeadlineMs() },
+      )
+      if (!result.ok) {
+        return toMcpToolError(result.code)
+      }
+      return toMcpToolSuccess(result.result)
+    },
+  )
+
   return server
 }
 

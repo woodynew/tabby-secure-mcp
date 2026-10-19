@@ -1,6 +1,9 @@
 import deepEqual from 'deep-equal'
 
-import { secureMcpConfigDefaults } from '../src/config/secure-mcp-config'
+import {
+  secureMcpConfigDefaults,
+  type StoredPermanentAuthorization,
+} from '../src/config/secure-mcp-config'
 
 /**
  * Minimal structural ConfigProxy for secureMcp, matching Tabby tabby-core ConfigService.store.
@@ -9,8 +12,16 @@ export function createTabbyConfigProxyHarness(initialStore: Record<string, unkno
   const defaults = secureMcpConfigDefaults
   const _store = { ...initialStore }
 
-  const store: { secureMcp: { authorizedSshProfileIds: string[] } } = {} as {
-    secureMcp: { authorizedSshProfileIds: string[] }
+  const store: {
+    secureMcp: {
+      authorizedSshProfileIds: string[]
+      permanentAuthorizations: StoredPermanentAuthorization[]
+    }
+  } = {} as {
+    secureMcp: {
+      authorizedSshProfileIds: string[]
+      permanentAuthorizations: StoredPermanentAuthorization[]
+    }
   }
 
   Object.defineProperty(store, 'secureMcp', {
@@ -33,6 +44,19 @@ export function createTabbyConfigProxyHarness(initialStore: Record<string, unkno
             delete real.authorizedSshProfileIds
           } else {
             real.authorizedSshProfileIds = value
+          }
+        },
+        get permanentAuthorizations(): StoredPermanentAuthorization[] {
+          if (real.permanentAuthorizations !== undefined) {
+            return real.permanentAuthorizations as StoredPermanentAuthorization[]
+          }
+          return [...defaults.secureMcp.permanentAuthorizations]
+        },
+        set permanentAuthorizations(value: StoredPermanentAuthorization[]) {
+          if (deepEqual(value, defaults.secureMcp.permanentAuthorizations)) {
+            delete real.permanentAuthorizations
+          } else {
+            real.permanentAuthorizations = value
           }
         },
       }

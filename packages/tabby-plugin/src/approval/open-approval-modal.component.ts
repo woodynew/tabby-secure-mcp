@@ -20,6 +20,7 @@ import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
         <dd><pre class="mb-0">{{ operationDisplay }}</pre></dd>
       </dl>
       <p>Time remaining: {{ remainingSeconds }}s</p>
+      <p>Allow remembers this open until you revoke it in Secure MCP settings.</p>
     </div>
     <div class="modal-footer">
       <button type="button" class="btn btn-outline-danger" ngbAutofocus (click)="reject('reject')">Reject</button>

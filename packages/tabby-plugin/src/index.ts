@@ -6,7 +6,9 @@ import { SettingsTabProvider } from 'tabby-settings'
 
 import { AuditService } from './audit/audit-service'
 import { ApprovalGatekeeper } from './approval/approval-gatekeeper'
+import { SystemApprovalScheduler } from './approval/approval-scheduler'
 import { SystemMonotonicClock } from './approval/monotonic-clock'
+import { PermanentAuthorizationStore } from './authorization/permanent-authorization-store'
 import { NgBootstrapApprovalPresenter } from './approval/ng-bootstrap-approval-presenter'
 import { OpenApprovalModalComponent } from './approval/open-approval-modal.component'
 import { PairingApprovalModalComponent } from './approval/pairing-approval-modal.component'
@@ -28,6 +30,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
   ],
   providers: [
     AuthorizedProfilesService,
+    PermanentAuthorizationStore,
     RuntimeLeaseState,
     AuditService,
     NgBootstrapApprovalPresenter,
@@ -38,6 +41,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         profilesService: ProfilesService,
         presenter: NgBootstrapApprovalPresenter,
         leaseState: RuntimeLeaseState,
+        memory: PermanentAuthorizationStore,
       ) =>
         new ApprovalGatekeeper(
           authorizedProfiles,
@@ -45,12 +49,15 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
           presenter,
           new SystemMonotonicClock(),
           () => leaseState.getLeaseEpoch(),
+          new SystemApprovalScheduler(),
+          memory,
         ),
       deps: [
         AuthorizedProfilesService,
         ProfilesService,
         NgBootstrapApprovalPresenter,
         RuntimeLeaseState,
+        PermanentAuthorizationStore,
       ],
     },
     {

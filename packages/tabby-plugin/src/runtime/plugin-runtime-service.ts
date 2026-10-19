@@ -412,6 +412,10 @@ export class PluginRuntimeService {
     }
     if (message.request.method === 'open_authorized_ssh_profile') {
       await this.handleOpenRpc(message, generation)
+      return
+    }
+    if (message.request.method === 'get_ssh_operation_authorization') {
+      await this.handleAuthorizationRpc(message, generation)
     }
   }
 
@@ -447,6 +451,54 @@ export class PluginRuntimeService {
       }
       void this.audit.safeAppend({ event: 'list_result', result: 'error', errorCode: 'internal' })
       await this.sendRpcResult(message.request_id, message.lease_epoch, generation, {
+        ok: false,
+        code: 'internal',
+      })
+    }
+  }
+
+  private async handleAuthorizationRpc(
+    message: Extract<IpcMessage, { type: 'rpc_request' }>,
+    generation: number,
+  ): Promise<void> {
+    if (message.request.method !== 'get_ssh_operation_authorization') {
+      return
+    }
+    const requestId = message.request_id
+    const leaseEpoch = message.lease_epoch
+    try {
+      const described = await this.gatekeeper.describeOperationAuthorization(
+        message.request.params.profile_ref,
+      )
+      if (!this.canServeRpc(leaseEpoch, generation)) {
+        return
+      }
+      if (!described.ok) {
+        await this.sendRpcResult(requestId, leaseEpoch, generation, {
+          ok: false,
+          code: 'target_unavailable',
+        })
+        return
+      }
+      await this.sendRpcResult(requestId, leaseEpoch, generation, {
+        ok: true,
+        result: {
+          profile_ref: described.profileRef,
+          open_session: described.openSession,
+          operation_tier: described.operationTier,
+          policy: described.policy.map(entry => ({
+            tier: entry.tier,
+            rank: entry.rank,
+            label: entry.label,
+            effect: entry.effect,
+          })),
+        },
+      })
+    } catch {
+      if (!this.canServeRpc(leaseEpoch, generation)) {
+        return
+      }
+      await this.sendRpcResult(requestId, leaseEpoch, generation, {
         ok: false,
         code: 'internal',
       })

@@ -9,6 +9,8 @@ import type {
 import { ApprovalGatekeeper, APPROVAL_WINDOW_MS } from '../src/approval/approval-gatekeeper'
 import { FakeApprovalScheduler } from '../src/approval/approval-scheduler'
 import type { MonotonicClock } from '../src/approval/monotonic-clock'
+import { stableProfileDigest } from '../src/approval/profile-security-snapshot'
+import type { AuthorizationMemory, EffectiveGrant } from '../src/authorization/permanent-authorization-store'
 import { AuthorizedProfilesService } from '../src/services/authorized-profiles.service'
 
 const SECRET_OPTIONS = {
@@ -138,6 +140,9 @@ function createHarness(options: {
     },
     setLeaseEpoch(epoch: number | null) {
       leaseEpoch = epoch
+    },
+    getLeaseEpoch(): number | null {
+      return leaseEpoch
     },
     async profileRef(): Promise<string> {
       const listed = await authorizedProfiles.listAuthorizedProfiles()
@@ -542,4 +547,182 @@ describe('ApprovalGatekeeper', () => {
     expect(vm.operationDisplay).not.toMatch(/secret-host|secret-user|hunter2/)
     expect(vm.targetDisplayName).toBe('Allowed SSH')
   })
+
+  it('skips the modal for a fresh permanent open grant, including an already expired deadline', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const digest = stableProfileDigest(sshProfile())
+    const memory = new FakeAuthorizationMemory()
+    memory.remember('allowed', digest, { openSession: true, operationTier: 'full' })
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+
+    const opened = await gatekeeper.requestOpen(
+      openRequest(harness, {
+        requestId: REQUEST_A,
+        profileRef,
+        deadlineMonotonicMs: harness.clock.now(),
+      }),
+    )
+
+    expect(opened).toEqual({ ok: true, status: 'opened' })
+    expect(harness.presenter.openCalls).toEqual([])
+    expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(1)
+    expect(memory.rememberCalls).toEqual([])
+  })
+
+  it('still prompts when the stored open grant does not match the profile digest', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const memory = new FakeAuthorizationMemory()
+    memory.remember('allowed', 'ab'.repeat(32), { openSession: true, operationTier: 'full' })
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+    harness.presenter.queueOpen('deny')
+
+    const result = await gatekeeper.requestOpen(openRequest(harness, { profileRef }))
+
+    expect(result).toEqual({ ok: false, code: 'not_approved' })
+    expect(harness.presenter.openCalls).toHaveLength(1)
+    expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
+  })
+
+  it('remembers an approved open and still reports success if persistence fails', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const memory = new FakeAuthorizationMemory()
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+    harness.presenter.queueOpen('allow')
+
+    expect(
+      await gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_A, profileRef })),
+    ).toEqual({ ok: true, status: 'opened' })
+    expect(memory.rememberCalls).toEqual([
+      { profileId: 'allowed', profileDigest: stableProfileDigest(sshProfile()) },
+    ])
+
+    const failing = new FakeAuthorizationMemory()
+    failing.failRemember = true
+    const failingGatekeeper = gatekeeperWithMemory(harness, failing)
+    harness.presenter.queueOpen('allow')
+    expect(
+      await failingGatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_B, profileRef })),
+    ).toEqual({ ok: true, status: 'opened' })
+    expect(failing.rememberCalls).toHaveLength(1)
+  })
+
+  it('keeps abort, lease, and profile TOCTOU checks on a remembered open', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const memory = new FakeAuthorizationMemory()
+    memory.remember('allowed', stableProfileDigest(sshProfile()), {
+      openSession: true,
+      operationTier: 'readonly',
+    })
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+    const controller = new AbortController()
+    controller.abort()
+
+    expect(
+      await gatekeeper.requestOpen(
+        openRequest(harness, { requestId: REQUEST_A, profileRef, signal: controller.signal }),
+      ),
+    ).toEqual({ ok: false, code: 'cancelled' })
+
+    const calls = { count: 0 }
+    const implementation = harness.profilesService.getProfiles.getMockImplementation()
+    harness.profilesService.getProfiles.mockImplementation(async (...args: unknown[]) => {
+      calls.count += 1
+      if (calls.count === 3) {
+        harness.setLeaseEpoch(null)
+      }
+      return implementation?.(...args)
+    })
+    expect(
+      await gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_B, profileRef })),
+    ).toEqual({ ok: false, code: 'not_approved' })
+
+    harness.setLeaseEpoch(1)
+    calls.count = 0
+    harness.profilesService.getProfiles.mockImplementation(async (...args: unknown[]) => {
+      calls.count += 1
+      if (calls.count === 4) {
+        harness.setProfiles([
+          sshProfile({ options: { ...SECRET_OPTIONS, host: 'changed.example' } }),
+        ])
+      }
+      return implementation?.(...args)
+    })
+    expect(
+      await gatekeeper.requestOpen(openRequest(harness, { requestId: REQUEST_C, profileRef })),
+    ).toEqual({ ok: false, code: 'target_unavailable' })
+    expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
+    expect(harness.presenter.openCalls).toEqual([])
+  })
+
+  it('describes the effective operation tier without prompting', async () => {
+    const harness = createHarness()
+    const profileRef = await harness.profileRef()
+    const memory = new FakeAuthorizationMemory()
+    memory.remember('allowed', stableProfileDigest(sshProfile()), {
+      openSession: true,
+      operationTier: 'readwrite',
+    })
+    const gatekeeper = gatekeeperWithMemory(harness, memory)
+
+    const described = await gatekeeper.describeOperationAuthorization(profileRef)
+
+    expect(described).toMatchObject({
+      ok: true,
+      profileRef,
+      openSession: true,
+      operationTier: 'readwrite',
+    })
+    if (described.ok) {
+      expect(described.policy.map(entry => entry.tier)).toEqual(['readonly', 'readwrite', 'full'])
+    }
+    expect(harness.presenter.openCalls).toEqual([])
+    expect(
+      await gatekeeper.describeOperationAuthorization('00000000000000000000000000000000'),
+    ).toEqual({ ok: false, code: 'target_unavailable' })
+    expect(
+      await harness.gatekeeper.describeOperationAuthorization(profileRef),
+    ).toMatchObject({ ok: true, openSession: false, operationTier: 'none' })
+  })
 })
+
+class FakeAuthorizationMemory implements AuthorizationMemory {
+  private readonly grants = new Map<string, EffectiveGrant>()
+  readonly rememberCalls: Array<{ profileId: string; profileDigest: string }> = []
+  failRemember = false
+
+  remember(profileId: string, profileDigest: string, grant: EffectiveGrant): void {
+    this.grants.set(`${profileId}:${profileDigest}`, grant)
+  }
+
+  effectiveGrant(profileId: string, profileDigest: string): EffectiveGrant {
+    return this.grants.get(`${profileId}:${profileDigest}`) ?? { openSession: false, operationTier: 'none' }
+  }
+
+  async rememberOpen(profileId: string, profileDigest: string): Promise<void> {
+    this.rememberCalls.push({ profileId, profileDigest })
+    if (this.failRemember) {
+      throw new Error('config save failed')
+    }
+    const current = this.effectiveGrant(profileId, profileDigest)
+    this.remember(profileId, profileDigest, { ...current, openSession: true })
+  }
+}
+
+function gatekeeperWithMemory(
+  harness: ReturnType<typeof createHarness>,
+  memory: AuthorizationMemory,
+): ApprovalGatekeeper {
+  return new ApprovalGatekeeper(
+    harness.authorizedProfiles,
+    harness.profilesService as never,
+    harness.presenter,
+    harness.clock,
+    () => harness.getLeaseEpoch(),
+    harness.scheduler,
+    memory,
+  )
+}

@@ -23,10 +23,16 @@ describe('Angular JIT constructor injection (Tabby host)', () => {
     const settings = readSource('settings/secure-mcp-settings.component.ts')
     expect(settings).toMatch(/@Inject\(ProfilesService\)/)
     expect(settings).toMatch(/@Inject\(ConfigService\)/)
+    expect(settings).toMatch(/@Inject\(PermanentAuthorizationStore\)/)
     expect(settings).toMatch(/import \{[^}]*ProfilesService[^}]*\} from 'tabby-core'/)
     expect(settings).not.toMatch(
       /import type \{[^}]*(?:ProfilesService|ConfigService)[^}]*\} from 'tabby-core'/,
     )
+
+    const memory = readSource('authorization/permanent-authorization-store.ts')
+    expect(memory).toMatch(/@Inject\(ConfigService\)/)
+    expect(memory).toMatch(/import \{[^}]*ConfigService[^}]*\} from 'tabby-core'/)
+    expect(memory).not.toMatch(/import type \{[^}]*ConfigService[^}]*\} from 'tabby-core'/)
 
     const lifecycle = readSource('runtime/plugin-runtime-lifecycle.ts')
     expect(lifecycle).toMatch(/@Inject\(PluginRuntimeService\)/)

@@ -126,6 +126,30 @@ describe('IPC message validation boundaries', () => {
       ).success,
     ).toBe(true)
     expect(rpcResultSchema.safeParse(rpcSuccess({ status: 'opened' })).success).toBe(true)
+    expect(
+      rpcResultSchema.safeParse(
+        rpcSuccess({
+          profile_ref: 'ref-1',
+          open_session: true,
+          operation_tier: 'readonly',
+          policy: [
+            { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
+            { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
+            { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+          ],
+        }),
+      ).success,
+    ).toBe(true)
+    expect(
+      rpcResultSchema.safeParse(
+        rpcSuccess({
+          profile_ref: 'ref-1',
+          open_session: true,
+          operation_tier: 'full',
+          policy: [{ tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control', shell: true }],
+        }),
+      ).success,
+    ).toBe(false)
 
     expect(
       rpcResultSchema.safeParse(

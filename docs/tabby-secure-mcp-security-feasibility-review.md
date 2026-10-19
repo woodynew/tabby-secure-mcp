@@ -34,6 +34,8 @@
 2. `open_authorized_ssh_profile`：经一次性审批后打开可见 SSH 标签页；
 3. 不执行任意命令，不读取或回传终端输出。
 
+后续增加只读工具 `get_ssh_operation_authorization`：查询 Tabby 设置里的永久打开记忆和三级操作策略。它不执行命令，也不能由客户端修改授权。
+
 ## 2. 评审边界与攻击者模型
 
 本评审假设：
@@ -228,7 +230,7 @@ host、port、username、group、SSH jump host 或配置来源；如业务确实
 5. 审批队列一次只显示一个请求；其他请求等待或被限流，防止多个弹窗造成授权混淆。
 6. Modal 显示工具、profile 显示名、完整操作和参数、请求来源、剩余时间。所有不可见控制字符、
    ANSI escape、双向文本控制字符都必须转义或标注。
-7. 用户只能选择“允许本次”或“拒绝”。不提供永久允许；首版也不提供五分钟记忆授权。
+7. 首次打开某个 profile 时，用户选择“允许”或“拒绝”。允许会把这次打开记为永久授权，直到用户在 Secure MCP 设置里撤销，或 profile 的安全投影发生变化。不提供五分钟临时记忆。MCP 客户端不能自行提升授权。
 8. 30 秒到期、关闭 modal、Tabby 退出、插件销毁、客户端取消或审批组件异常均产生拒绝。
 9. 批准结果只对相同 `request_id` 和摘要有效，且只能消费一次。
 10. 执行前重新构造 `ProfileSecuritySnapshot` 并比较审批摘要；任何安全相关字段变化都拒绝并
@@ -246,6 +248,8 @@ host、port、username、group、SSH jump host 或配置来源；如业务确实
 - 人工看到的字符串不一定等于远端 Shell 最终执行的语义；
 - 终端可能处于编辑器、交互程序、密码提示或另一条命令中，盲目 `sendInput()` 会造成混淆；
 - 审批后 profile、当前目录、远端用户或 shell 状态可能已改变。
+
+当前阶段只持久化三级授权策略，不执行远端命令：低级只读、中级读写、高级完全控制。较高一级覆盖其自身和全部更低级别。高级完全控制仍不表示原始 shell、隐式 sudo、解释器、端口转发或文件传输。策略由 `evaluateStructuredOperation` 判定；MCP 只能通过 `get_ssh_operation_authorization` 读取当前级别和静态策略。profile 安全投影变化后，打开记忆和操作级别一并失效，直到用户重新允许打开或在设置中重新保存。
 
 若后续确有自动化需求，只增加结构化工具：
 
@@ -362,8 +366,8 @@ flowchart LR
 | --- | --- | --- |
 | Companion | 实现 MCP stdio、schema 校验、请求取消和到插件的受限 RPC | 不读取 Tabby 配置，不持有 SSH 凭据，不执行 SSH，不启动 HTTP 服务 |
 | Tabby plugin | 读取并最小投影 profile、执行白名单复核、显示审批、调用公开 Tabby API | 不接受任意对象反序列化，不把完整 profile/Config 跨 IPC 发送 |
-| Gatekeeper | 串行审批、摘要绑定、一次性消费、Default Deny 和审计 | 不依赖 MCP 客户端自行审批，不缓存永久授权 |
-| Settings | 管理显式白名单及可暴露字段 | 不保存凭据副本，不提供“永久免审批” |
+| Gatekeeper | 串行审批、摘要绑定、一次性消费、Default Deny 和审计 | 不依赖 MCP 客户端自行审批。永久打开记忆只保存在 Tabby 配置，profile 投影变化后失效 |
+| Settings | 管理显式白名单、永久打开记忆和只读 / 读写 / 完全控制三级策略 | 不保存凭据副本。MCP 客户端不能修改级别 |
 
 IPC 基线：
 

@@ -25,6 +25,7 @@ beforeAll(() => {
     expect(contents.startsWith('#!/usr/bin/env node')).toBe(true)
     expect(contents).toMatch(/serveStdio/)
     expect(contents).toMatch(/list_authorized_ssh_profiles/)
+    expect(contents).toMatch(/get_ssh_operation_authorization/)
     expect(contents).toMatch(/tabby-secure-mcp-pairing-v1/)
   })
 })
@@ -121,7 +122,7 @@ async function pairPeer(
 type FakePluginPeerOptions = ConstructorParameters<typeof FakePluginPeer.connect>[0]
 
 describe('companion stdio MCP integration', () => {
-  it('exposes exactly two tools and returns structured list results', async () => {
+  it('exposes the profile, open, and authorization tools', async () => {
     const runtimeDir = await createRuntimeDir()
     const { client, paths } = await startCompanion(runtimeDir)
     const descriptor = JSON.parse(await readFile(paths.descriptorPath, 'utf8'))
@@ -139,6 +140,7 @@ describe('companion stdio MCP integration', () => {
 
     const tools = await client.listTools()
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+      'get_ssh_operation_authorization',
       'list_authorized_ssh_profiles',
       'open_authorized_ssh_profile',
     ])
@@ -204,6 +206,54 @@ describe('companion stdio MCP integration', () => {
     })
   })
 
+  it('returns the stored operation tier without accepting a command', async () => {
+    const runtimeDir = await createRuntimeDir()
+    const { client, paths } = await startCompanion(runtimeDir)
+    const descriptor = JSON.parse(await readFile(paths.descriptorPath, 'utf8'))
+    const policy = [
+      { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
+      { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
+      { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+    ]
+    await pairPeer(runtimeDir, paths.descriptorPath, paths.endpoint, descriptor.pairing_nonce, descriptor.pid, {
+      onRpc: async (request, ctx) => {
+        if (request.method !== 'get_ssh_operation_authorization') {
+          return {
+            type: 'rpc_result',
+            request_id: ctx.requestId,
+            lease_epoch: ctx.leaseEpoch,
+            ok: false,
+            error: { code: 'not_approved' },
+          }
+        }
+        return {
+          type: 'rpc_result',
+          request_id: ctx.requestId,
+          lease_epoch: ctx.leaseEpoch,
+          ok: true,
+          result: {
+            profile_ref: request.params.profile_ref,
+            open_session: false,
+            operation_tier: 'readonly',
+            policy,
+          },
+        }
+      },
+    })
+
+    const result = await client.callTool({
+      name: 'get_ssh_operation_authorization',
+      arguments: { profile_ref: 'ref-1' },
+    })
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toEqual({
+      profile_ref: 'ref-1',
+      open_session: false,
+      operation_tier: 'readonly',
+      policy,
+    })
+  })
+
   it('cancels in-flight work on abort and ignores late plugin results', async () => {
     const runtimeDir = await createRuntimeDir()
     const { client, paths } = await startCompanion(runtimeDir)
@@ -245,7 +295,11 @@ describe('companion stdio MCP integration', () => {
     await new Promise((resolve) => setTimeout(resolve, 350))
 
     const tools = await client.listTools()
-    expect(tools.tools).toHaveLength(2)
+    expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
+      'get_ssh_operation_authorization',
+      'list_authorized_ssh_profiles',
+      'open_authorized_ssh_profile',
+    ])
   }, 15_000)
 
   it('returns expired when the plugin does not answer before the deadline', async () => {

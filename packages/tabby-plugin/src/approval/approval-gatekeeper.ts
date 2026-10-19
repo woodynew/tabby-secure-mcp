@@ -1,6 +1,12 @@
 import { Injectable } from '@angular/core'
-import type { ProfilesService } from 'tabby-core'
+import type { PartialProfile, Profile, ProfilesService } from 'tabby-core'
 
+import type { AuthorizationMemory } from '../authorization/permanent-authorization-store'
+import {
+  publicOperationTierPolicy,
+  type GrantedOperationTier,
+  type OperationTierPolicy,
+} from '../authorization/operation-tier-policy'
 import { presentWithApprovalDeadline } from './approval-deadline'
 import { buildOpenApprovalDigest } from './approval-digest'
 import {
@@ -18,8 +24,8 @@ import {
 import type { MonotonicClock } from './monotonic-clock'
 import {
   buildProfileSecuritySnapshot,
-  ProfileSnapshotError,
   profileSecuritySnapshotsEqual,
+  stableProfileDigest,
   type ProfileSecuritySnapshot,
 } from './profile-security-snapshot'
 import { AuthorizedProfilesService } from '../services/authorized-profiles.service'
@@ -60,6 +66,18 @@ export type PairingApprovalResult = { ok: true; approved: true } | { ok: false; 
 
 export type LeaseEpochSource = () => number | null
 
+export type PublicOperationTierPolicy = Pick<OperationTierPolicy, 'tier' | 'rank' | 'label' | 'effect'>
+
+export type OperationAuthorizationDescription =
+  | {
+      ok: true
+      profileRef: string
+      openSession: boolean
+      operationTier: GrantedOperationTier
+      policy: PublicOperationTierPolicy[]
+    }
+  | { ok: false; code: 'target_unavailable' }
+
 @Injectable()
 export class ApprovalGatekeeper {
   private readonly runKey = new Uint8Array(32)
@@ -74,6 +92,7 @@ export class ApprovalGatekeeper {
     private readonly clock: MonotonicClock,
     private readonly leaseEpochSource: LeaseEpochSource,
     private readonly scheduler: ApprovalScheduler = new SystemApprovalScheduler(),
+    private readonly memory?: AuthorizationMemory,
   ) {
     crypto.getRandomValues(this.runKey)
   }
@@ -145,24 +164,23 @@ export class ApprovalGatekeeper {
 
     const receivedAt = this.clock.now()
     const effectiveDeadline = computeEffectiveOpenDeadline(receivedAt, request.deadlineMonotonicMs)
-    if (receivedAt >= effectiveDeadline) {
-      return { ok: false, code: 'not_approved' }
-    }
 
     if (this.presentationInFlight) {
       return { ok: false, code: 'busy' }
     }
 
-    this.rememberRequestId(request.requestId)
-
-    const normalizedRequest: OpenApprovalRequest = {
-      ...request,
-      deadlineMonotonicMs: effectiveDeadline,
-    }
-
     this.presentationInFlight = true
     try {
-      return await this.executeOpenAfterApproval(normalizedRequest)
+      const rememberedOpen = await this.peekRememberedOpen(request.profileRef)
+      if (!rememberedOpen && receivedAt >= effectiveDeadline) {
+        return { ok: false, code: 'not_approved' }
+      }
+
+      this.rememberRequestId(request.requestId)
+      return await this.executeOpenAfterApproval({
+        ...request,
+        deadlineMonotonicMs: effectiveDeadline,
+      })
     } finally {
       this.presentationInFlight = false
     }
@@ -171,14 +189,20 @@ export class ApprovalGatekeeper {
   private async executeOpenAfterApproval(request: OpenApprovalRequest): Promise<OpenApprovalResult> {
     let approvedSnapshot: ProfileSecuritySnapshot
     let displayName: string
+    let rememberedOpen = false
 
     try {
       const profile = await this.authorizedProfiles.resolveAuthorizedProfile(request.profileRef)
       approvedSnapshot = buildProfileSecuritySnapshot(profile, this.runKey)
+      rememberedOpen = this.profileHasRememberedOpen(profile)
       const listed = await this.authorizedProfiles.listAuthorizedProfiles()
       displayName = listed.find(entry => entry.profile_ref === request.profileRef)?.display_name ?? profile.name
     } catch {
       return { ok: false, code: 'target_unavailable' }
+    }
+
+    if (!rememberedOpen && this.clock.now() >= request.deadlineMonotonicMs) {
+      return { ok: false, code: 'not_approved' }
     }
 
     const approvalDigest = buildOpenApprovalDigest(
@@ -194,39 +218,69 @@ export class ApprovalGatekeeper {
       this.runKey,
     )
 
-    const decision = await presentWithApprovalDeadline({
-      clock: this.clock,
-      scheduler: this.scheduler,
-      deadlineMonotonicMs: request.deadlineMonotonicMs,
-      userSignal: request.signal,
-      present: context =>
-        this.presenter.presentOpen(
-          buildOpenApprovalViewModel({
-            clientIdentity: request.clientIdentity,
-            toolName: request.toolName,
-            targetDisplayName: displayName,
-            operation: request.operation,
-            remainingSeconds: context.remainingSeconds(),
-          }),
-          context,
-        ),
-    })
+    if (!rememberedOpen) {
+      const decision = await presentWithApprovalDeadline({
+        clock: this.clock,
+        scheduler: this.scheduler,
+        deadlineMonotonicMs: request.deadlineMonotonicMs,
+        userSignal: request.signal,
+        present: context =>
+          this.presenter.presentOpen(
+            buildOpenApprovalViewModel({
+              clientIdentity: request.clientIdentity,
+              toolName: request.toolName,
+              targetDisplayName: displayName,
+              operation: request.operation,
+              remainingSeconds: context.remainingSeconds(),
+            }),
+            context,
+          ),
+      })
 
-    if (request.signal?.aborted) {
+      if (request.signal?.aborted) {
+        return { ok: false, code: 'cancelled' }
+      }
+
+      if (decision !== 'allow') {
+        return { ok: false, code: 'not_approved' }
+      }
+    } else if (request.signal?.aborted) {
       return { ok: false, code: 'cancelled' }
     }
 
-    if (decision !== 'allow') {
-      return { ok: false, code: 'not_approved' }
-    }
+    return this.consumeApprovalAndOpen(request, approvedSnapshot, approvalDigest, {
+      enforceDeadline: !rememberedOpen,
+      rememberAfterOpen: !rememberedOpen,
+    })
+  }
 
-    return this.consumeApprovalAndOpen(request, approvedSnapshot, approvalDigest)
+  async describeOperationAuthorization(profileRef: string): Promise<OperationAuthorizationDescription> {
+    try {
+      await this.authorizedProfiles.listAuthorizedProfiles()
+      const profile = await this.authorizedProfiles.resolveAuthorizedProfile(profileRef)
+      if (typeof profile.id !== 'string') {
+        return { ok: false, code: 'target_unavailable' }
+      }
+      const grant = this.memory
+        ? this.memory.effectiveGrant(profile.id, stableProfileDigest(profile))
+        : { openSession: false, operationTier: 'none' as const }
+      return {
+        ok: true,
+        profileRef,
+        openSession: grant.openSession,
+        operationTier: grant.operationTier,
+        policy: publicOperationTierPolicy(),
+      }
+    } catch {
+      return { ok: false, code: 'target_unavailable' }
+    }
   }
 
   private async consumeApprovalAndOpen(
     request: OpenApprovalRequest,
     approvedSnapshot: ProfileSecuritySnapshot,
     approvalDigest: string,
+    options: { enforceDeadline: boolean; rememberAfterOpen: boolean },
   ): Promise<OpenApprovalResult> {
     if (request.signal?.aborted) {
       return { ok: false, code: 'cancelled' }
@@ -237,7 +291,7 @@ export class ApprovalGatekeeper {
       return { ok: false, code: 'not_approved' }
     }
 
-    if (this.clock.now() >= request.deadlineMonotonicMs) {
+    if (options.enforceDeadline && this.clock.now() >= request.deadlineMonotonicMs) {
       return { ok: false, code: 'not_approved' }
     }
 
@@ -281,9 +335,46 @@ export class ApprovalGatekeeper {
       if (opened === null) {
         return { ok: false, code: 'target_unavailable' }
       }
+      if (options.rememberAfterOpen) {
+        await this.rememberApprovedOpen(freshProfile)
+      }
       return { ok: true, status: 'opened' }
     } catch {
       return { ok: false, code: 'target_unavailable' }
+    }
+  }
+
+  private async peekRememberedOpen(profileRef: string): Promise<boolean> {
+    if (!this.memory) {
+      return false
+    }
+    try {
+      const profile = await this.authorizedProfiles.resolveAuthorizedProfile(profileRef)
+      return this.profileHasRememberedOpen(profile)
+    } catch {
+      return false
+    }
+  }
+
+  private profileHasRememberedOpen(profile: PartialProfile<Profile>): boolean {
+    if (!this.memory || typeof profile.id !== 'string') {
+      return false
+    }
+    try {
+      return this.memory.effectiveGrant(profile.id, stableProfileDigest(profile)).openSession
+    } catch {
+      return false
+    }
+  }
+
+  private async rememberApprovedOpen(profile: PartialProfile<Profile>): Promise<void> {
+    if (!this.memory || typeof profile.id !== 'string') {
+      return
+    }
+    try {
+      await this.memory.rememberOpen(profile.id, stableProfileDigest(profile))
+    } catch {
+      // The SSH tab is already open. A config write failure must not hide that success.
     }
   }
 

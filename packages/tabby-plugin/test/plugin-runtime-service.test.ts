@@ -195,6 +195,64 @@ describe('PluginRuntimeService', () => {
     runtime.destroy()
   })
 
+  it('returns a managed operation tier without opening a tab', async () => {
+    const harness = await startGatewayHarness()
+    closers.push(() => harness.close())
+    const base = await mkdtemp(path.join(tmpdir(), 'plugin-rt-'))
+    const descriptorPath = path.join(base, 'descriptor.json')
+    const descriptorBody = `${JSON.stringify({
+      protocol_version: 1,
+      endpoint: harness.endpoint,
+      pid: harness.pid,
+      expires_at: Date.now() + 60_000,
+      pairing_nonce: harness.pairingNonce,
+    })}\n`
+    const { runtime, gatekeeper } = createRuntime({
+      descriptorPath,
+      descriptorBody,
+    })
+    const described = vi.spyOn(gatekeeper, 'describeOperationAuthorization').mockResolvedValue({
+      ok: true,
+      profileRef: 'ffffffffffffffffffffffffffffffff',
+      openSession: true,
+      operationTier: 'readonly',
+      policy: [
+        { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
+        { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
+        { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+      ],
+    })
+    runtime.start()
+    await vi.waitFor(
+      () => {
+        expect(runtime.isHolder()).toBe(true)
+      },
+      { timeout: 5_000 },
+    )
+
+    const result = await harness.gateway.call({
+      method: 'get_ssh_operation_authorization',
+      params: { profile_ref: 'ffffffffffffffffffffffffffffffff' },
+    })
+
+    expect(described).toHaveBeenCalledWith('ffffffffffffffffffffffffffffffff')
+    expect(result).toEqual({
+      ok: true,
+      method: 'get_ssh_operation_authorization',
+      result: {
+        profile_ref: 'ffffffffffffffffffffffffffffffff',
+        open_session: true,
+        operation_tier: 'readonly',
+        policy: [
+          { tier: 'readonly', rank: 1, label: '低级 · 只读', effect: 'read_only' },
+          { tier: 'readwrite', rank: 2, label: '中级 · 读写', effect: 'read_write' },
+          { tier: 'full', rank: 3, label: '高级 · 完全控制', effect: 'full_control' },
+        ],
+      },
+    })
+    runtime.destroy()
+  })
+
   it('cancels reconnect timer on destroy', async () => {
     const base = await mkdtemp(path.join(tmpdir(), 'plugin-rt-'))
     const descriptorPath = path.join(base, 'missing.json')

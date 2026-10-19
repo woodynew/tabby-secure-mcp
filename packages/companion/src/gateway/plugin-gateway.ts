@@ -7,6 +7,7 @@ import {
   IpcFrameDecoder,
   listProfilesRpcResultSchema,
   openProfileRpcResultSchema,
+  operationAuthorizationRpcResultSchema,
   type ErrorCode,
   type IpcMessage,
   type OperationalRequest,
@@ -423,7 +424,14 @@ export class PluginGateway {
       }
       return { ok: true, method, result: parsed.data }
     }
-    const parsed = openProfileRpcResultSchema.safeParse(result)
+    if (method === 'open_authorized_ssh_profile') {
+      const parsed = openProfileRpcResultSchema.safeParse(result)
+      if (!parsed.success) {
+        return { ok: false, code: 'internal' }
+      }
+      return { ok: true, method, result: parsed.data }
+    }
+    const parsed = operationAuthorizationRpcResultSchema.safeParse(result)
     if (!parsed.success) {
       return { ok: false, code: 'internal' }
     }

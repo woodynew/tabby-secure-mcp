@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import type { PartialProfile, Profile } from 'tabby-core'
 
 export const PROFILE_SECURITY_SNAPSHOT_VERSION = 1
@@ -73,6 +73,10 @@ function digestProjection(projection: unknown, runKey: Uint8Array): string {
   return createHmac('sha256', Buffer.from(runKey))
     .update(payload, 'utf8')
     .digest('hex')
+}
+
+export function stableProfileDigest(profile: PartialProfile<Profile>): string {
+  return createHash('sha256').update(JSON.stringify(buildSecurityProjection(profile)), 'utf8').digest('hex')
 }
 
 export function buildProfileSecuritySnapshot(

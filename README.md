@@ -13,7 +13,7 @@ flowchart LR
 ```
 
 - **`packages/tabby-plugin`** (`tabby-secure-mcp`) — Angular Tabby plugin: settings whitelist, pairing UI, 30s open approvals, lease-aware IPC to the companion, audit log.
-- **`packages/companion`** (`@tabby-secure-mcp/companion`) — Node stdio MCP server with two tools; connects outbound to the plugin.
+- **`packages/companion`** (`@tabby-secure-mcp/companion`) — Node stdio MCP server with three tools; connects outbound to the plugin.
 - **`packages/ipc-contract`** — Shared framed IPC schema and limits.
 
 See the [security feasibility review](docs/tabby-secure-mcp-security-feasibility-review.md) for threat model, trust boundaries, and design rationale.
@@ -49,8 +49,10 @@ See the [security feasibility review](docs/tabby-secure-mcp-security-feasibility
 
 - Protection is **application-layer least privilege** inside the Tabby + OS user trust domain, not kernel-level isolation between Tabby plugins.
 - Other Tabby plugins and same-user processes are out of scope for strong isolation.
-- MCP tools are limited to **read-only profile listing** and **open in Tabby** after explicit approval; no remote command or output tools.
-- Pairing and per-open approvals are required; approvals expire after 30 seconds and are single-use.
+- MCP tools are **read-only profile listing**, **open in Tabby**, and **read the operation grant**. There is no remote command or output tool.
+- The first open of a profile still requires a 30-second approval. Allow stores a permanent open grant until it is revoked in Secure MCP settings or the profile security projection changes.
+- Operation tiers are **low / read-only**, **medium / read-write**, and **high / full control**. A higher tier covers every lower class. Full control is not a raw shell, implicit sudo, interpreter, port forward, or file transfer. The MCP client cannot raise its own tier.
+- Pairing is still required. Open approvals that are not already remembered expire after 30 seconds and are single-use.
 - Local audit JSONL is hash-chained but cannot detect wholesale log replacement.
 
 ## Verification commands

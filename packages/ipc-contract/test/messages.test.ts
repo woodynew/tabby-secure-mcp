@@ -11,7 +11,7 @@ import {
 const base = { v: 1 as const, seq: 1 }
 
 describe('version 1 IPC schemas', () => {
-  it('accepts every supported message and only the two operational requests', () => {
+  it('accepts every supported message and the operational requests', () => {
     const messages = [
       {
         ...base,
@@ -81,6 +81,12 @@ describe('version 1 IPC schemas', () => {
     expect(
       operationalRequestSchema.safeParse({
         method: 'open_authorized_ssh_profile',
+        params: { profile_ref: 'profile-1' },
+      }).success,
+    ).toBe(true)
+    expect(
+      operationalRequestSchema.safeParse({
+        method: 'get_ssh_operation_authorization',
         params: { profile_ref: 'profile-1' },
       }).success,
     ).toBe(true)

@@ -95,10 +95,18 @@ export const openAuthorizedSshProfileRequestSchema = z.strictObject({
   }),
 })
 
+export const getSshOperationAuthorizationRequestSchema = z.strictObject({
+  method: z.literal('get_ssh_operation_authorization'),
+  params: z.strictObject({
+    profile_ref: identifier,
+  }),
+})
+
 export const operationalRequestSchema = secureSchema(
   z.discriminatedUnion('method', [
     listAuthorizedSshProfilesRequestSchema,
     openAuthorizedSshProfileRequestSchema,
+    getSshOperationAuthorizationRequestSchema,
   ]),
 )
 export type OperationalRequest = z.infer<typeof operationalRequestSchema>
@@ -189,9 +197,28 @@ export const openProfileRpcResultSchema = z.strictObject({
   status: z.literal('opened'),
 })
 
+export const operationTierSchema = z.enum(['none', 'readonly', 'readwrite', 'full'])
+
+export const operationAuthorizationRpcResultSchema = z.strictObject({
+  profile_ref: identifier,
+  open_session: z.boolean(),
+  operation_tier: operationTierSchema,
+  policy: z
+    .array(
+      z.strictObject({
+        tier: z.enum(['readonly', 'readwrite', 'full']),
+        rank: z.number().int().min(1).max(3),
+        label: boundedString.min(1).max(64),
+        effect: z.enum(['read_only', 'read_write', 'full_control']),
+      }),
+    )
+    .max(3),
+})
+
 export const rpcSuccessResultSchema = z.union([
   listProfilesRpcResultSchema,
   openProfileRpcResultSchema,
+  operationAuthorizationRpcResultSchema,
 ])
 
 const rpcSuccessSchema = z.strictObject({
