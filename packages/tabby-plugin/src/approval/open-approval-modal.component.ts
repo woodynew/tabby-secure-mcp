@@ -5,26 +5,26 @@ import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
   selector: 'secure-mcp-open-approval-modal',
   template: `
     <div class="modal-header">
-      <h4 class="modal-title">Approve SSH profile open</h4>
-      <button type="button" class="btn-close" aria-label="Close" (click)="reject('dismiss')"></button>
+      <h4 class="modal-title">{{ 'secureMcp.approveOpen' | translate }}</h4>
+      <button type="button" class="btn-close" [attr.aria-label]="'secureMcp.close' | translate" (click)="reject('dismiss')"></button>
     </div>
     <div class="modal-body">
       <dl>
-        <dt>Client</dt>
+        <dt>{{ 'secureMcp.client' | translate }}</dt>
         <dd>{{ clientIdentity }}</dd>
-        <dt>Tool</dt>
+        <dt>{{ 'secureMcp.tool' | translate }}</dt>
         <dd>{{ toolName }}</dd>
-        <dt>Target</dt>
+        <dt>{{ 'secureMcp.target' | translate }}</dt>
         <dd>{{ targetDisplayName }}</dd>
-        <dt>Operation</dt>
+        <dt>{{ 'secureMcp.operation' | translate }}</dt>
         <dd><pre class="mb-0">{{ operationDisplay }}</pre></dd>
       </dl>
-      <p>Time remaining: {{ remainingSeconds }}s</p>
-      <p>Allow remembers this open until you revoke it in Secure MCP settings.</p>
+      <p>{{ 'secureMcp.timeRemaining' | translate:{ seconds: remainingSeconds } }}</p>
+      <p>{{ 'secureMcp.rememberOpen' | translate }}</p>
     </div>
     <div class="modal-footer">
-      <button type="button" class="btn btn-outline-danger" ngbAutofocus (click)="reject('reject')">Reject</button>
-      <button type="button" class="btn btn-primary" (click)="allow()">Allow</button>
+      <button type="button" class="btn btn-outline-danger" ngbAutofocus (click)="reject('reject')">{{ 'secureMcp.reject' | translate }}</button>
+      <button type="button" class="btn btn-primary" (click)="allow()">{{ 'secureMcp.allow' | translate }}</button>
     </div>
   `,
 })

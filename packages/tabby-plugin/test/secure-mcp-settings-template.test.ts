@@ -9,7 +9,7 @@ describe('Secure MCP settings template', () => {
     expect(secureMcpSettingsTemplate).toContain('value="keep"')
     expect(secureMcpSettingsTemplate).toContain('value="after-completion"')
     expect(secureMcpSettingsTemplate).toContain('onClosePolicyChange(')
-    expect(secureMcpSettingsTemplate).toMatch(/timeout/i)
+    expect(secureMcpSettingsTemplate).toContain("'secureMcp.commandSessionsHelp' | translate")
   })
   it('only uses row.displayName for visible row interpolation', () => {
     const interpolations = secureMcpSettingsTemplate.match(/\{\{[^}]+\}\}/g) ?? []

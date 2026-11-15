@@ -54,7 +54,7 @@ export class SecureMcpSettingsComponent implements OnInit {
         this.authorizations.list(),
       )
     } catch {
-      this.error = 'Failed to load SSH profiles.'
+      this.error = 'secureMcp.errorLoadProfiles'
       this.rows = []
       this.loadedProfiles = []
     } finally {
@@ -74,7 +74,7 @@ export class SecureMcpSettingsComponent implements OnInit {
       await persistCommandSessionClosePolicy(this.config, rawPolicy)
     } catch {
       this.commandSessionClosePolicy = previous
-      this.error = 'Failed to save the command session close policy. Changes were not persisted.'
+      this.error = 'secureMcp.errorSaveClosePolicy'
     } finally {
       this.saving = false
       // Native selection changes can precede Angular's binding update on a rejected save.
@@ -106,9 +106,8 @@ export class SecureMcpSettingsComponent implements OnInit {
       )
     } catch {
       row.selected = previousSelected
-      this.error =
-        'Failed to save authorized profile selection to Tabby config. Changes were not persisted.'
       await this.reload()
+      this.error = 'secureMcp.errorSaveProfiles'
     } finally {
       this.saving = false
     }
@@ -141,8 +140,8 @@ export class SecureMcpSettingsComponent implements OnInit {
   ): Promise<void> {
     const profile = this.loadedProfiles.find(candidate => candidate.id === row.id)
     if (!profile) {
-      this.error = 'Failed to save the operation grant.'
       await this.reload()
+      this.error = 'secureMcp.errorProfileMissing'
       return
     }
     this.saving = true
@@ -155,8 +154,8 @@ export class SecureMcpSettingsComponent implements OnInit {
       }
       await this.reload()
     } catch {
-      this.error = 'Failed to save the operation grant to Tabby config. Changes were not persisted.'
       await this.reload()
+      this.error = 'secureMcp.errorSaveGrant'
     } finally {
       this.saving = false
     }

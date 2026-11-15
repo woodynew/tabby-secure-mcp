@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common'
 import { Inject, NgModule } from '@angular/core'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
-import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ConfigService, ProfilesService } from 'tabby-core'
+import TabbyCoreModule, { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ConfigService, ProfilesService } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
 import { AuditService } from './audit/audit-service'
@@ -21,15 +21,17 @@ import { RuntimeLeaseState } from './runtime/runtime-lease-state'
 import { AuthorizedProfilesService } from './services/authorized-profiles.service'
 import { SecureMcpSettingsComponent } from './settings/secure-mcp-settings.component'
 import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab.provider'
+import { SecureMcpTranslations } from './i18n/secure-mcp-translations'
 
 @NgModule({
-  imports: [CommonModule, NgbModule],
+  imports: [TabbyCoreModule, CommonModule, NgbModule],
   declarations: [
     SecureMcpSettingsComponent,
     PairingApprovalModalComponent,
     OpenApprovalModalComponent,
   ],
   providers: [
+    SecureMcpTranslations,
     AuthorizedProfilesService,
     PermanentAuthorizationStore,
     RuntimeLeaseState,
@@ -88,5 +90,8 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
   ],
 })
 export default class TabbySecureMcpPluginModule {
-  constructor(@Inject(PluginRuntimeLifecycle) _runtimeLifecycle: PluginRuntimeLifecycle) {}
+  constructor(
+    @Inject(SecureMcpTranslations) _translations: SecureMcpTranslations,
+    @Inject(PluginRuntimeLifecycle) _runtimeLifecycle: PluginRuntimeLifecycle,
+  ) {}
 }

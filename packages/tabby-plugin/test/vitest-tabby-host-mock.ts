@@ -10,7 +10,13 @@ vi.mock('tabby-core', () => {
   }
   class ConfigProvider {}
   class BootstrapData {}
+  class LocaleService {}
+  class TranslateService {}
+  class TabbyCoreModule {}
   return {
+    default: TabbyCoreModule,
+    LocaleService,
+    TranslateService,
     ProfilesService,
     ConfigService,
     ConfigProvider,

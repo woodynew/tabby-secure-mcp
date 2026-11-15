@@ -120,10 +120,28 @@ describe('Secure MCP settings grant management', () => {
     expect(component.commandSessionClosePolicy).toBe('after-completion')
     expect(select.value).toBe('after-completion')
     expect(readCommandSessionClosePolicy(harness.store)).toBe('after-completion')
-    expect(component.error).toMatch(/Failed to save/)
+    expect(component.error).toBe('secureMcp.errorSaveClosePolicy')
     expect(component.saving).toBe(false)
     await component.onClosePolicyChange('invalid')
     expect(component.commandSessionClosePolicy).toBe('after-completion')
+  })
+
+  it('keeps a translated save error after refreshing the selected profiles', async () => {
+    const harness = createTabbyConfigProxyHarness()
+    const config = { store: harness.store, save: vi.fn(async () => { throw new Error('disk full') }) }
+    const profile: PartialProfile<Profile> = {
+      id: 'ssh-1', type: 'ssh', name: 'Test', options: {},
+      isBuiltin: false, isTemplate: false,
+    }
+    const component = new SecureMcpSettingsComponent(
+      config as never, { getProfiles: async () => [profile] } as never,
+      new PermanentAuthorizationStore(config as never),
+    )
+    await component.reload()
+    await component.onToggle(component.rows[0]!, true)
+    expect(component.error).toBe('secureMcp.errorSaveProfiles')
+    expect(component.loading).toBe(false)
+    expect(component.saving).toBe(false)
   })
 
   it('persists a tier and clears it when the profile is removed from the whitelist', async () => {

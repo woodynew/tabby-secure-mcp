@@ -1,6 +1,6 @@
 export const secureMcpSettingsTemplate = `
-      <h3>Command sessions</h3>
-      <label for="command-session-close-policy">After a command finishes</label>
+      <h3>{{ 'secureMcp.commandSessions' | translate }}</h3>
+      <label for="command-session-close-policy">{{ 'secureMcp.afterCommand' | translate }}</label>
       <select
         id="command-session-close-policy"
         class="form-select mb-2"
@@ -8,33 +8,26 @@ export const secureMcpSettingsTemplate = `
         [disabled]="saving || loading"
         (change)="onClosePolicyChange($any($event.target).value, $any($event.target))"
       >
-        <option value="keep">Keep session open (default)</option>
-        <option value="after-completion">Close when the command finishes</option>
+        <option value="keep">{{ 'secureMcp.keepSession' | translate }}</option>
+        <option value="after-completion">{{ 'secureMcp.closeWhenFinished' | translate }}</option>
       </select>
       <p class="text-muted">
-        Applies only to new sessions created for MCP commands. Sessions opened manually or with the
-        open-profile tool stay open. A timeout, cancellation, connection failure, or output limit
-        keeps the session open when command completion cannot be confirmed.
+        {{ 'secureMcp.commandSessionsHelp' | translate }}
       </p>
 
-    <h3>Authorized SSH profiles</h3>
+    <h3>{{ 'secureMcp.authorizedProfiles' | translate }}</h3>
     <p class="text-muted">
-      Select which non-built-in SSH profiles MCP may use. Credentials, hostnames, usernames, groups,
-      and profile options are never exposed outside Tabby. Output from an existing tab is not read.
+      {{ 'secureMcp.authorizedProfilesHelp' | translate }}
     </p>
     <p class="text-muted">
-      Allowing an open remembers it until you revoke it here. Operation tiers authorize SSH commands
-      and are managed only in Tabby. Low authorizes read-only SSH commands, medium authorizes
-      read-write SSH commands, and high authorizes full-control SSH commands. A higher tier includes
-      every lower command class. A command whose class fits the tier runs once in a new visible tab.
-      Shell operators are rejected, and the returned text is capped. The MCP client cannot raise its own tier.
+      {{ 'secureMcp.operationTiersHelp' | translate }}
     </p>
 
-    <div *ngIf="loading">Loading SSH profiles…</div>
-    <div *ngIf="error" class="alert alert-danger" role="alert">{{ error }}</div>
+    <div *ngIf="loading">{{ 'secureMcp.loadingProfiles' | translate }}</div>
+    <div *ngIf="error" class="alert alert-danger" role="alert">{{ error | translate }}</div>
 
     <div *ngIf="!loading">
-      <div *ngIf="rows.length === 0" class="text-muted">No eligible SSH profiles found.</div>
+      <div *ngIf="rows.length === 0" class="text-muted">{{ 'secureMcp.noProfiles' | translate }}</div>
       <div *ngFor="let row of rows" class="mb-3">
         <label class="d-block">
           <input
@@ -47,7 +40,7 @@ export const secureMcpSettingsTemplate = `
         </label>
         <div *ngIf="row.selected" class="ms-4">
           <label>
-            Operation tier
+            {{ 'secureMcp.operationTier' | translate }}
             <select
               [disabled]="saving"
               (change)="onTierChange(row, $any($event.target).value)"
@@ -56,11 +49,11 @@ export const secureMcpSettingsTemplate = `
                 *ngFor="let option of tierOptions"
                 [value]="option.value"
                 [selected]="option.value === row.operationTier"
-              >{{ option.label }}</option>
+              >{{ option.labelKey | translate }}</option>
             </select>
           </label>
           <p *ngIf="row.grantStale" class="text-warning mb-1">
-            This profile changed after the grant was saved. Save the grant again to restore it.
+            {{ 'secureMcp.staleGrant' | translate }}
           </p>
           <button
             *ngIf="row.grantStale"
@@ -69,7 +62,7 @@ export const secureMcpSettingsTemplate = `
             [disabled]="saving"
             (click)="onRefreshGrant(row)"
           >
-            Save grant again
+            {{ 'secureMcp.saveGrantAgain' | translate }}
           </button>
           <button
             *ngIf="row.openSession"
@@ -78,7 +71,7 @@ export const secureMcpSettingsTemplate = `
             [disabled]="saving"
             (click)="onRevokeOpen(row)"
           >
-            Revoke remembered open
+            {{ 'secureMcp.revokeOpen' | translate }}
           </button>
         </div>
       </div>

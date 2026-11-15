@@ -49,6 +49,14 @@ open when completion cannot be confirmed. A command that finishes with a nonzero
 still close its session. Existing sessions and sessions opened manually or through
 `open_authorized_ssh_profile` stay open.
 
+### Interface language
+
+Secure MCP follows Tabby's language setting. Simplified Chinese (`zh-CN`) and English are supported;
+other languages, including Traditional Chinese, fall back to English. Open settings pages and
+approval dialogs update when the Tabby language changes, including existing errors and countdowns.
+There is no separate plugin language setting. Profile names, client identities, tool identifiers,
+and the original operation JSON remain unchanged.
+
 ## Documentation
 
 | Document | Purpose |
