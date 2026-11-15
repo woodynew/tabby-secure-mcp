@@ -88,15 +88,15 @@ describe('AuditService', () => {
     expect(lines[0]).toContain('runtime_connect')
   })
 
-  it('resumes a valid chain and rotates on corruption', async () => {
+  it('preserves a corrupt log and refuses further critical writes', async () => {
     const { fs, lines } = createMemoryFs()
     const first = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
     await first.append({ event: 'runtime_start', result: 'ok' })
     lines[0] = lines[0].replace(/"hash":"[a-f0-9]{64}"/, '"hash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"')
 
     const second = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
-    await second.append({ event: 'runtime_connect', result: 'ok' })
-    expect(lines.some((line) => line.startsWith('renamed:'))).toBe(true)
-    expect(second.getChainHead().sequence).toBe(1)
+    const original = [...lines]
+    await expect(second.append({ event: 'runtime_connect', result: 'ok' })).rejects.toThrow()
+    expect(lines).toEqual(original)
   })
 })

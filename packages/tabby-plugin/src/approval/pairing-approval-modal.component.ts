@@ -5,17 +5,25 @@ import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
   selector: 'secure-mcp-pairing-approval-modal',
   template: `
     <div class="modal-header">
-      <h4 class="modal-title">Approve companion pairing</h4>
+      <h4 class="modal-title">Approve MCP client connection</h4>
       <button type="button" class="btn-close" aria-label="Close" (click)="reject('dismiss')"></button>
     </div>
     <div class="modal-body">
-      <p>A local companion is requesting pairing approval.</p>
+      <p>A local MCP client is requesting access. Its declared name is not verified program identity.</p>
       <dl>
-        <dt>Client</dt>
+        <dt>Credential name</dt>
         <dd>{{ clientIdentity }}</dd>
-        <dt>Companion</dt>
+        <dt>Declared client name</dt>
         <dd>{{ companionLabel }}</dd>
       </dl>
+      <label *ngIf="allowDuration" class="d-block">
+        Remember this client
+        <select [value]="duration" (change)="duration = $any($event.target).value">
+          <option value="session">This session only (up to 24 hours)</option>
+          <option value="24h">Remember for 24 hours</option>
+          <option value="permanent">Permanent — until revoked</option>
+        </select>
+      </label>
       <p>Time remaining: {{ remainingSeconds }}s</p>
     </div>
     <div class="modal-footer">
@@ -28,6 +36,8 @@ export class PairingApprovalModalComponent {
   @Input() clientIdentity = ''
   @Input() companionLabel = ''
   @Input() remainingSeconds = 0
+  @Input() allowDuration = false
+  duration: 'session' | '24h' | 'permanent' = 'session'
 
   constructor(@Inject(NgbActiveModal) private readonly activeModal: NgbActiveModal) {}
 
@@ -43,7 +53,7 @@ export class PairingApprovalModalComponent {
   }
 
   allow(): void {
-    this.activeModal.close('allow')
+    this.activeModal.close(this.allowDuration ? this.duration : 'allow')
   }
 
   reject(_reason: string): void {

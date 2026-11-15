@@ -6,7 +6,7 @@ import type {
   ApprovalPresentationContext,
   ApprovalPresenter,
 } from '../src/approval/approval-presenter'
-import { ApprovalGatekeeper, APPROVAL_WINDOW_MS } from '../src/approval/approval-gatekeeper'
+import { ApprovalGatekeeper, APPROVAL_WINDOW_MS } from './helpers/test-gatekeeper'
 import { FakeApprovalScheduler } from '../src/approval/approval-scheduler'
 import type { MonotonicClock } from '../src/approval/monotonic-clock'
 import { stableProfileDigest } from '../src/approval/profile-security-snapshot'
@@ -96,7 +96,9 @@ function createHarness(options: {
     store: { secureMcp: { authorizedSshProfileIds: [...(options.whitelist ?? ['allowed'])] } },
     save: vi.fn(async () => undefined),
   }
+  Object.defineProperty(config.store, 'profiles', { get: () => currentProfiles })
   const profilesService = {
+    getConfigProxyForProfile: (profile: any) => profile,
     getProfiles: vi.fn(async () => currentProfiles.map(p => ({ ...p, options: { ...p.options } }))),
     openNewTabForProfile: vi.fn(async () => ({})),
     sendInput: vi.fn(),
@@ -178,7 +180,7 @@ function openRequest(
 }
 
 describe('ApprovalGatekeeper', () => {
-  it('expires open approval at exactly 30 seconds without opening a tab', async () => {
+  it('expires open approval at exactly 60 seconds without opening a tab', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
     const hungPresenter: ApprovalPresenter = {
@@ -195,14 +197,19 @@ describe('ApprovalGatekeeper', () => {
     )
 
     const pending = gatekeeper.requestOpen(openRequest(harness, { profileRef, requestId: REQUEST_A }))
-    harness.advance(APPROVAL_WINDOW_MS)
+    let settled = false
+    void pending.then(() => { settled = true })
+    harness.advance(59_999)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    harness.advance(1)
     const result = await pending
 
     expect(result).toEqual({ ok: false, code: 'not_approved' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
   })
 
-  it('caps caller deadlines to receivedAt + 30_000ms', async () => {
+  it('caps caller deadlines to receivedAt + 60_000ms', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
     const hungPresenter: ApprovalPresenter = {
@@ -222,7 +229,7 @@ describe('ApprovalGatekeeper', () => {
       openRequest(harness, {
         profileRef,
         requestId: REQUEST_B,
-        deadlineMonotonicMs: harness.clock.now() + 60_000,
+        deadlineMonotonicMs: harness.clock.now() + 90_000,
       }),
     )
     harness.advance(APPROVAL_WINDOW_MS)
@@ -505,7 +512,7 @@ describe('ApprovalGatekeeper', () => {
     })
   })
 
-  it('expires pairing approval at exactly 30 seconds', async () => {
+  it('expires pairing approval at exactly 60 seconds', async () => {
     const harness = createHarness()
     const hungPresenter: ApprovalPresenter = {
       presentPairing: () => new Promise(() => undefined),
@@ -714,7 +721,8 @@ describe('ApprovalGatekeeper', () => {
       output: 'files\n',
       truncated: false,
     })
-    expect(commandTab.sent[0]).toBe('ls -la\r')
+    expect(commandTab.sent).toHaveLength(1)
+    expect(commandTab.sent[0]).toMatch(/^\/bin\/sh -c /)
     expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(1)
     expect(harness.profilesService.sendInput).not.toHaveBeenCalled()
     expect(harness.presenter.openCalls).toEqual([])
@@ -810,12 +818,12 @@ function fakeCommandTab(): { tab: object; sent: string[] } {
       },
       sendInput(data: string) {
         sent.push(data)
-        const marker = data.match(/'(__tabby_secure_mcp_[0-9a-f]+__)'/)?.[1]
-        if (!marker) {
+        const parts = data.match(/'([0-9a-f]+)' '([0-9a-f]+)'\r$/)
+        if (!parts) {
           return
         }
         for (const listener of listeners) {
-          listener(`files\n${marker}\n`)
+          listener(`\u001e${parts[1]}${parts[2]}:start\u001ffiles\n\u001e${parts[1]}${parts[2]}:end\u001f`)
         }
       },
     },

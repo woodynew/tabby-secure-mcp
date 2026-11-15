@@ -21,7 +21,7 @@ function readProductionSources(): string {
     'authorization/permanent-authorization-store.ts',
     'authorization/ssh-command.ts',
     'services/authorized-profiles.service.ts',
-    'runtime/plugin-runtime-service.ts',
+    'runtime/plugin-http-runtime.ts',
     'audit/audit-service.ts',
   ]
   return files.map(file => readFileSync(resolve(SRC_ROOT, file), 'utf8')).join('\n')

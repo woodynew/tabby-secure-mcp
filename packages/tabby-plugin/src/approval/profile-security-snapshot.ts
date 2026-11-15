@@ -1,7 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import type { PartialProfile, Profile } from 'tabby-core'
 
-export const PROFILE_SECURITY_SNAPSHOT_VERSION = 1
+export const PROFILE_SECURITY_SNAPSHOT_VERSION = 2
 
 export interface ProfileSecuritySnapshot {
   version: number
@@ -52,10 +52,12 @@ function canonicalize(value: unknown, seen: WeakSet<object>): unknown {
 function buildSecurityProjection(profile: PartialProfile<Profile>): unknown {
   const projection = canonicalize(
     {
+      version: PROFILE_SECURITY_SNAPSHOT_VERSION,
       id: profile.id ?? '',
       provider: profile.type,
       type: profile.type,
       name: profile.name,
+      group: profile.group ?? '',
       options: profile.options ?? {},
     },
     new WeakSet(),

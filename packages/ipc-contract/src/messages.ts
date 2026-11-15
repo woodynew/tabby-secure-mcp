@@ -80,6 +80,8 @@ export const errorCodeSchema = z.enum([
   'rate_limited',
   'plugin_unavailable',
   'internal',
+  'audit_unavailable',
+  'outcome_unknown',
 ])
 export type ErrorCode = z.infer<typeof errorCodeSchema>
 

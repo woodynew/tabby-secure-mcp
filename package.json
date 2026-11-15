@@ -12,12 +12,15 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "pretypecheck": "npm run build --workspace @tabby-secure-mcp/ipc-contract",
+    "build:internal": "npm run build --workspace @tabby-secure-mcp/ipc-contract && npm run build --workspace @tabby-secure-mcp/companion",
+    "pretypecheck": "npm run build:internal",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
+    "pretest": "npm run build:internal",
     "pretest:scripts": "npm run build",
     "test:scripts": "vitest run --config vitest.scripts.config.mts",
     "test:integration": "npm run test:integration --workspaces --if-present",
+    "pretest:integration": "npm run build:internal",
     "pack:check": "node scripts/pack-check.mjs",
     "install:local": "node scripts/install-local.mjs"
   },

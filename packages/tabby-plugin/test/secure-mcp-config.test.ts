@@ -17,6 +17,7 @@ describe('secure MCP config helpers', () => {
   it('exposes ConfigProvider defaults with an empty whitelist', () => {
     expect(secureMcpConfigDefaults).toEqual({
       secureMcp: {
+        http: { enabled: false, port: 50333 },
         authorizedSshProfileIds: [],
         permanentAuthorizations: [],
       },

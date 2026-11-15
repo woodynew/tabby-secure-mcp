@@ -14,9 +14,9 @@ describe('open request validation', () => {
     expect(isValidOpenRequestId('abc')).toBe(false)
   })
 
-  it('caps effective deadline to receivedAt + 30_000ms', () => {
+  it('allows a full minute and still respects a shorter caller deadline', () => {
     const receivedAt = 1_000
-    expect(computeEffectiveOpenDeadline(receivedAt, receivedAt + 60_000)).toBe(receivedAt + 30_000)
+    expect(computeEffectiveOpenDeadline(receivedAt, receivedAt + 90_000)).toBe(receivedAt + 60_000)
     expect(computeEffectiveOpenDeadline(receivedAt, receivedAt + 10_000)).toBe(receivedAt + 10_000)
   })
 

@@ -8,60 +8,7 @@ import {
 
 export const MAX_SSH_COMMAND_BYTES = 512
 
-const READ_ONLY_PROGRAMS = new Set([
-  'cat',
-  'ls',
-  'pwd',
-  'whoami',
-  'id',
-  'uname',
-  'date',
-  'df',
-  'du',
-  'ps',
-  'uptime',
-  'hostname',
-  'printenv',
-  'env',
-  'stat',
-  'file',
-  'head',
-  'tail',
-  'wc',
-  'grep',
-  'egrep',
-  'fgrep',
-  'which',
-  'dirname',
-  'basename',
-  'readlink',
-  'realpath',
-  'free',
-  'lsblk',
-  'lscpu',
-  'echo',
-  'printf',
-  'true',
-  'false',
-  'groups',
-  'w',
-  'ss',
-  'netstat',
-  'test',
-  '[',
-])
-
-const READ_WRITE_PROGRAMS = new Set([
-  'mkdir',
-  'rmdir',
-  'touch',
-  'cp',
-  'mv',
-  'ln',
-  'tee',
-  'truncate',
-  'install',
-])
+const NO_ARGUMENT_READS = new Set(['pwd', 'whoami', 'id', 'uptime'])
 
 export type SingleSshCommandFailure = 'not_a_single_command' | 'not_granted' | 'tier_insufficient' | 'grant_stale'
 
@@ -92,6 +39,9 @@ export function authorizeSingleSshCommand(input: {
 export function parseSingleSshCommand(
   raw: string,
 ): { command: string; program: string; commandClass: SshCommandClass } | null {
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(raw)) {
+    return null
+  }
   const command = raw.trim()
   if (!command || Buffer.byteLength(command, 'utf8') > MAX_SSH_COMMAND_BYTES) {
     return null
@@ -101,20 +51,55 @@ export function parseSingleSshCommand(
   if (!tokens || !program) {
     return null
   }
-  return { command, program, commandClass: classifyProgram(program) }
+  const classified = classifyProgram(program, tokens.slice(1))
+  const encoded = classified.args.map(quoteShellArgument).join(' ')
+  return {
+    command: `${classified.commandClass === 'full_control' ? '' : 'command -p '}${quoteShellArgument(program)}${encoded ? ` ${encoded}` : ''}`,
+    program,
+    commandClass: classified.commandClass,
+  }
 }
 
-function classifyProgram(program: string): SshCommandClass {
-  if (program.includes('/') || program === '.' || program === '..') {
-    return 'full_control'
+export function quoteShellArgument(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function classifyProgram(program: string, args: string[]): { commandClass: SshCommandClass; args: string[] } {
+  const full = { commandClass: 'full_control' as const, args }
+  if (NO_ARGUMENT_READS.has(program) && args.length === 0) {
+    return { commandClass: 'read_only', args }
   }
-  if (READ_ONLY_PROGRAMS.has(program)) {
-    return 'read_only'
+  if (program === 'uname' && args.every(arg => /^-[asnrvm]+$/.test(arg))) {
+    return { commandClass: 'read_only', args }
   }
-  if (READ_WRITE_PROGRAMS.has(program)) {
-    return 'read_write'
+  const policies: Record<string, { flags: string; minimum: number; commandClass: SshCommandClass }> = {
+    ls: { flags: 'aAlhdFnrtR', minimum: 0, commandClass: 'read_only' },
+    cat: { flags: '', minimum: 1, commandClass: 'read_only' },
+    wc: { flags: 'clmw', minimum: 0, commandClass: 'read_only' },
+    mkdir: { flags: 'p', minimum: 1, commandClass: 'read_write' },
+    touch: { flags: '', minimum: 1, commandClass: 'read_write' },
+    cp: { flags: 'R', minimum: 2, commandClass: 'read_write' },
+    mv: { flags: '', minimum: 2, commandClass: 'read_write' },
   }
-  return 'full_control'
+  const policy = Object.prototype.hasOwnProperty.call(policies, program) ? policies[program] : undefined
+  if (!policy) return full
+  const flags: string[] = []
+  const paths: string[] = []
+  let operands = false
+  for (const arg of args) {
+    if (!operands && arg === '--') {
+      operands = true
+    } else if (!operands && arg.startsWith('-')) {
+      if (!policy.flags || !new RegExp(`^-[${policy.flags}]+$`).test(arg)) return full
+      flags.push(arg)
+    } else {
+      operands = true
+      if (arg.startsWith('-') && !args.includes('--')) return full
+      paths.push(arg)
+    }
+  }
+  if (paths.length < policy.minimum) return full
+  return { commandClass: policy.commandClass, args: [...flags, '--', ...paths] }
 }
 
 function tokenizeSingleCommand(command: string): string[] | null {

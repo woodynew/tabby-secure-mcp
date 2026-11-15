@@ -1,9 +1,10 @@
-import { lstat, mkdir, mkdtemp, readFile, rm, stat, unlink } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { assertTabbyPluginDiscoveryManifest } from './pack-check-core.mjs'
+import { assertPackManifest, assertPluginBundle, assertTabbyPluginDiscoveryManifest } from './pack-check-core.mjs'
 import { packWorkspacePackage, runCommand } from './npm-pack-utils.mjs'
 
 export const EXPECTED_VERSION = '0.1.0'
@@ -351,61 +352,19 @@ export async function assessRuntimeCleanupSafety(runtimePaths, deps = {}) {
   return { status: 'cleanable' }
 }
 
-async function removeOwnedRegularFile(filePath, runtimeDirectory, platform) {
-  try {
-    const fileStat = await lstat(filePath)
-    if (fileStat.isSymbolicLink()) {
-      return
-    }
-    if (!isPathInsideDirectory(filePath, runtimeDirectory, platform)) {
-      return
-    }
-    await unlink(filePath)
-  } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') {
-      return
-    }
-    throw error
-  }
-}
+/** @deprecated Stop all clients and inspect stale artifacts manually; never delete live paths. */
+export async function cleanStaleRuntimeArtifacts(_runtimePaths, _deps = {}) {}
 
-export async function cleanStaleRuntimeArtifacts(runtimePaths, deps = {}) {
-  const platform = deps.platform ?? process.platform
-  await removeOwnedRegularFile(runtimePaths.descriptorPath, runtimePaths.runtimeDirectory, platform)
-  await removeOwnedRegularFile(runtimePaths.lockPath, runtimePaths.runtimeDirectory, platform)
-  if (platform !== 'win32') {
-    await removeOwnedRegularFile(runtimePaths.endpoint, runtimePaths.runtimeDirectory, platform)
-  }
-}
-
-export function companionBinPath(pluginsDir, platform = process.platform) {
-  const binName = platform === 'win32' ? 'tabby-secure-mcp.cmd' : 'tabby-secure-mcp'
-  const pathApi = platformPathApi(platform)
-  return pathApi.join(pluginsDir, 'node_modules', '.bin', binName)
-}
-
-export async function verifyInstalledLayout(pluginsDir, deps = {}) {
-  const platform = deps.platform ?? process.platform
-  const pluginPkgPath = path.join(pluginsDir, 'node_modules', PLUGIN_PACKAGE_NAME, 'package.json')
-  const companionPkgPath = path.join(
-    pluginsDir,
-    'node_modules',
-    '@tabby-secure-mcp',
-    'companion',
-    'package.json',
-  )
-  const pluginPkg = JSON.parse(await readFile(pluginPkgPath, 'utf8'))
-  const companionPkg = JSON.parse(await readFile(companionPkgPath, 'utf8'))
+export async function verifyInstalledLayout(pluginsDir) {
+  const pluginRoot = path.join(pluginsDir, 'node_modules', PLUGIN_PACKAGE_NAME)
+  const pluginPkg = JSON.parse(await readFile(path.join(pluginRoot, 'package.json'), 'utf8'))
   if (pluginPkg.name !== PLUGIN_PACKAGE_NAME || pluginPkg.version !== EXPECTED_VERSION) {
     throw new Error('installed plugin package name or version mismatch')
   }
   assertTabbyPluginDiscoveryManifest(pluginPkg, 'installed plugin')
-  if (companionPkg.name !== COMPANION_PACKAGE_NAME || companionPkg.version !== EXPECTED_VERSION) {
-    throw new Error('installed companion package name or version mismatch')
-  }
-  await stat(path.join(pluginsDir, 'node_modules', PLUGIN_PACKAGE_NAME, 'dist', 'index.js'))
-  await stat(path.join(pluginsDir, 'node_modules', '@tabby-secure-mcp', 'companion', 'dist', 'cli.js'))
-  await stat(companionBinPath(pluginsDir, platform))
+  assertPackManifest(pluginPkg, 'plugin')
+  if (pluginPkg.main !== 'dist/index.js') throw new Error('installed plugin main must be dist/index.js')
+  assertPluginBundle(await readFile(path.join(pluginRoot, 'dist', 'index.js'), 'utf8'))
 }
 
 export function listInstallerMetadataPaths(pluginsDir) {
@@ -416,32 +375,71 @@ export function listInstallerMetadataPaths(pluginsDir) {
   ]
 }
 
-export async function removeTransientInstallerMetadata(pluginsDir) {
-  const hiddenLock = path.join(pluginsDir, 'node_modules', '.package-lock.json')
+/** @deprecated Persistent dependencies require preserving npm metadata. */
+export async function removeTransientInstallerMetadata(_pluginsDir) {}
+
+export async function assertNoTransientInstallerReferences(pluginsDir) {
+  const manifest = await readPluginsManifest(pluginsDir)
+  for (const name of [PLUGIN_PACKAGE_NAME]) {
+    const reference = manifest.dependencies?.[name]
+    if (reference === undefined) continue
+    if (typeof reference !== 'string' || !reference.startsWith('file:')) throw new Error(`Missing persistent file: dependency for ${name}`)
+    const artifact = path.resolve(pluginsDir, reference.slice(5))
+    const store = path.join(pluginsDir, '.secure-mcp-artifacts')
+    if (path.dirname(artifact) !== store || !/^[a-f0-9]{64}\.tgz$/.test(path.basename(artifact))) throw new Error(`Unsafe file: dependency for ${name}`)
+    const info = await lstat(artifact)
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe installer artifact')
+    const hash = createHash('sha256').update(await readFile(artifact)).digest('hex')
+    if (path.basename(artifact) !== `${hash}.tgz`) throw new Error('Installer artifact checksum mismatch')
+  }
+}
+
+async function readPluginsManifest(pluginsDir) {
   try {
-    await unlink(hiddenLock)
+    const manifest = JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8'))
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw new Error('Invalid plugins package.json')
+    return manifest
   } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') {
-      return
-    }
+    if (error?.code === 'ENOENT') return { private: true }
     throw error
   }
 }
 
-export async function assertNoTransientInstallerReferences(pluginsDir) {
-  for (const manifestPath of listInstallerMetadataPaths(pluginsDir)) {
-    try {
-      const raw = await readFile(manifestPath, 'utf8')
-      if (raw.includes('file:')) {
-        throw new Error(`${manifestPath} must not persist file: dependency references`)
-      }
-    } catch (error) {
-      if (error && typeof error === 'object' && error.code === 'ENOENT') {
-        continue
-      }
-      throw error
-    }
+async function assertRegisteredPlugins(pluginsDir) {
+  const manifest = await readPluginsManifest(pluginsDir)
+  const declared = new Set(Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.optionalDependencies }))
+  const nodeModules = path.join(pluginsDir, 'node_modules')
+  let roots
+  try { roots = await readdir(nodeModules, { withFileTypes: true }) } catch (error) { if (error?.code === 'ENOENT') return; throw error }
+  const packages = []
+  for (const entry of roots) {
+    if (entry.name.startsWith('.') || (!entry.isDirectory() && !entry.isSymbolicLink())) continue
+    if (entry.name.startsWith('@')) {
+      for (const child of await readdir(path.join(nodeModules, entry.name))) packages.push(`${entry.name}/${child}`)
+    } else packages.push(entry.name)
   }
+  const unregistered = []
+  for (const name of packages) {
+    if ([PLUGIN_PACKAGE_NAME, COMPANION_PACKAGE_NAME].includes(name) || declared.has(name)) continue
+    let pkg
+    try { pkg = JSON.parse(await readFile(path.join(nodeModules, name, 'package.json'), 'utf8')) } catch (error) { if (error?.code === 'ENOENT') continue; throw error }
+    if (Array.isArray(pkg.keywords) && pkg.keywords.includes('tabby-plugin')) unregistered.push(name)
+  }
+  if (unregistered.length) throw new Error(`Unregistered Tabby plugins: ${unregistered.join(', ')}. Register them in package.json before installing.`)
+}
+
+async function persistTarball(pluginsDir, file) {
+  const data = await readFile(file)
+  const hash = createHash('sha256').update(data).digest('hex')
+  const directory = path.join(pluginsDir, '.secure-mcp-artifacts')
+  await mkdir(directory, { recursive: true })
+  const target = path.join(directory, `${hash}.tgz`)
+  try { await writeFile(target, data, { flag: 'wx', mode: 0o600 }) } catch (error) {
+    if (error?.code !== 'EEXIST') throw error
+    const info = await lstat(target)
+    if (!info.isFile() || info.isSymbolicLink() || createHash('sha256').update(await readFile(target)).digest('hex') !== hash) throw new Error('Installer artifact collision')
+  }
+  return target
 }
 
 /** @deprecated Use assertNoTransientInstallerReferences */
@@ -484,7 +482,7 @@ export async function runInstall(options = {}) {
   if (runtimeAssessment.status === 'blocked') {
     throw new Error(runtimeAssessment.message)
   }
-  await cleanStaleRuntimeArtifacts(runtimePaths, { platform })
+  await assertRegisteredPlugins(pluginsDir)
 
   if (!parsed.skipBuild) {
     await runCommand('npm', ['run', 'build'], { cwd: repoRoot, env: options.env })
@@ -497,12 +495,9 @@ export async function runInstall(options = {}) {
       cwd: repoRoot,
       env: options.env,
     })
-    const companionPack = await packWorkspacePackage('packages/companion', packDir, {
-      cwd: repoRoot,
-      env: options.env,
-    })
-
     await mkdir(pluginsDir, { recursive: true })
+    const pluginArtifact = await persistTarball(pluginsDir, pluginPack.tarballPath)
+    try { await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify({ private: true }, null, 2) + '\n', { flag: 'wx' }) } catch (error) { if (error?.code !== 'EEXIST') throw error }
     await runCommand(
       'npm',
       [
@@ -512,24 +507,32 @@ export async function runInstall(options = {}) {
         '--ignore-scripts',
         '--no-audit',
         '--no-fund',
-        '--no-save',
+        '--save',
+        '--save-exact',
         '--legacy-peer-deps',
-        pluginPack.tarballPath,
-        companionPack.tarballPath,
+        '--include=dev',
+        '--include=optional',
+        pluginArtifact,
       ],
       { cwd: repoRoot, env: options.env },
     )
 
-    await verifyInstalledLayout(pluginsDir, { platform })
-    await removeTransientInstallerMetadata(pluginsDir)
+    await verifyInstalledLayout(pluginsDir)
+    const installedManifest = await readPluginsManifest(pluginsDir)
+    for (const name of [PLUGIN_PACKAGE_NAME]) {
+      if (!installedManifest.dependencies?.[name]) throw new Error(`Missing persistent dependency for ${name}`)
+    }
     await assertNoTransientInstallerReferences(pluginsDir)
 
-    const companionCommand = platformPathApi(platform).resolve(companionBinPath(pluginsDir, platform))
+    const warnings = []
+    if (['dependencies', 'devDependencies', 'optionalDependencies'].some(section => installedManifest[section]?.[COMPANION_PACKAGE_NAME] !== undefined)) {
+      warnings.push('Legacy companion dependency retained. Disable old stdio client configurations; remove the old package manually when no longer needed.')
+    }
     return {
       pluginsDir: platformPathApi(platform).resolve(pluginsDir),
-      companionCommand,
+      connectionInstructions: 'Restart Tabby, enable Secure MCP in the main window, add a client and copy its local Streamable HTTP URL and Authorization header from settings. Disable old stdio client configurations.',
+      warnings,
       pluginPack,
-      companionPack,
     }
   } finally {
     if (ownsPackDir && !options.keepPackDir) {
@@ -539,6 +542,6 @@ export async function runInstall(options = {}) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const { pluginsDir, companionCommand } = await runInstall({ argv })
-  process.stdout.write(`${pluginsDir}\n${companionCommand}\n`)
+  const { pluginsDir, connectionInstructions, warnings } = await runInstall({ argv })
+  process.stdout.write([pluginsDir, connectionInstructions, ...warnings].join('\n') + '\n')
 }

@@ -28,6 +28,7 @@ function createHarness(profiles: PartialProfile<Profile>[], whitelist: string[] 
     save: vi.fn(async () => undefined),
   }
   const profilesService = {
+    getConfigProxyForProfile: (profile: any) => profile,
     getProfiles: vi.fn(async () => currentProfiles.map(p => ({ ...p, options: { ...p.options } }))),
   }
   const service = new AuthorizedProfilesService(profilesService as never, config as never)
