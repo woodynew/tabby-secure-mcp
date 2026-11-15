@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common'
 import { Inject, NgModule } from '@angular/core'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
-import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ProfilesService } from 'tabby-core'
+import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ConfigService, ProfilesService } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
 import { AuditService } from './audit/audit-service'
@@ -13,6 +13,7 @@ import { NgBootstrapApprovalPresenter } from './approval/ng-bootstrap-approval-p
 import { OpenApprovalModalComponent } from './approval/open-approval-modal.component'
 import { PairingApprovalModalComponent } from './approval/pairing-approval-modal.component'
 import { SecureMcpConfigProvider } from './config/secure-mcp-config-provider'
+import { readCommandSessionClosePolicy } from './config/secure-mcp-config'
 import { normalizeWindowBootstrap } from './runtime/bootstrap-data'
 import { PluginRuntimeLifecycle } from './runtime/plugin-runtime-lifecycle'
 import { PluginRuntimeService } from './runtime/plugin-runtime-service'
@@ -42,6 +43,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         presenter: NgBootstrapApprovalPresenter,
         leaseState: RuntimeLeaseState,
         memory: PermanentAuthorizationStore,
+        config: ConfigService,
       ) =>
         new ApprovalGatekeeper(
           authorizedProfiles,
@@ -51,6 +53,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
           () => leaseState.getLeaseEpoch(),
           new SystemApprovalScheduler(),
           memory,
+          () => readCommandSessionClosePolicy(config.store),
         ),
       deps: [
         AuthorizedProfilesService,
@@ -58,6 +61,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         NgBootstrapApprovalPresenter,
         RuntimeLeaseState,
         PermanentAuthorizationStore,
+        ConfigService,
       ],
     },
     {

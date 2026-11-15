@@ -7,6 +7,9 @@ import { PermanentAuthorizationStore } from '../authorization/permanent-authoriz
 import {
   persistAuthorizedSshProfileIds,
   readAuthorizedSshProfileIds,
+  persistCommandSessionClosePolicy,
+  readCommandSessionClosePolicy,
+  type CommandSessionClosePolicy,
 } from '../config/secure-mcp-config'
 import {
   buildSecureMcpSettingsRows,
@@ -24,6 +27,7 @@ export class SecureMcpSettingsComponent implements OnInit {
   readonly tierOptions = SETTINGS_OPERATION_TIER_OPTIONS
   loading = true
   saving = false
+  commandSessionClosePolicy: CommandSessionClosePolicy = 'keep'
   error: string | null = null
   private loadedProfiles: PartialProfile<Profile>[] = []
 
@@ -40,6 +44,7 @@ export class SecureMcpSettingsComponent implements OnInit {
   async reload(): Promise<void> {
     this.loading = true
     this.error = null
+    this.commandSessionClosePolicy = readCommandSessionClosePolicy(this.config.store)
     try {
       this.loadedProfiles = await this.profiles.getProfiles({ includeBuiltin: false, clone: true })
       const authorizedIds = readAuthorizedSshProfileIds(this.config.store)
@@ -54,6 +59,28 @@ export class SecureMcpSettingsComponent implements OnInit {
       this.loadedProfiles = []
     } finally {
       this.loading = false
+    }
+  }
+
+  async onClosePolicyChange(rawPolicy: string, select?: Pick<HTMLSelectElement, 'value'>): Promise<void> {
+    if (this.saving || (rawPolicy !== 'keep' && rawPolicy !== 'after-completion')) {
+      return
+    }
+    const previous = this.commandSessionClosePolicy
+    this.saving = true
+    this.error = null
+    this.commandSessionClosePolicy = rawPolicy
+    try {
+      await persistCommandSessionClosePolicy(this.config, rawPolicy)
+    } catch {
+      this.commandSessionClosePolicy = previous
+      this.error = 'Failed to save the command session close policy. Changes were not persisted.'
+    } finally {
+      this.saving = false
+      // Native selection changes can precede Angular's binding update on a rejected save.
+      if (select) {
+        select.value = this.commandSessionClosePolicy
+      }
     }
   }
 

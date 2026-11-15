@@ -37,6 +37,18 @@ See the [security feasibility review](docs/tabby-secure-mcp-security-feasibility
 
 3. Restart Tabby, whitelist SSH profiles in **Settings → Secure MCP**, then configure MCP clients using the absolute companion path. See [Configure MCP clients](docs/configure-mcp-clients.md).
 
+### Command session closing
+
+In **Settings → Secure MCP → Command sessions**, choose **Keep session open (default)** or
+**Close when the command finishes**. The setting applies globally to new sessions created by
+`run_authorized_ssh_command`; a change takes effect for subsequent requests.
+
+Automatic closing happens only after the command's completion marker is received and its output
+has been captured. Timeouts, cancellations, connection failures, and output limits leave the session
+open when completion cannot be confirmed. A command that finishes with a nonzero exit status can
+still close its session. Existing sessions and sessions opened manually or through
+`open_authorized_ssh_profile` stay open.
+
 ## Documentation
 
 | Document | Purpose |

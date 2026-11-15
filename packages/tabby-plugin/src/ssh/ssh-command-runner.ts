@@ -10,7 +10,7 @@ interface Subscription {
 }
 
 interface Subscribable<T> {
-  subscribe(observer: { next?: (value: T) => void }): Subscription
+  subscribe(observer: { next?: (value: T) => void; complete?: () => void }): Subscription
 }
 
 export interface SingleCommandTab {
@@ -19,10 +19,12 @@ export interface SingleCommandTab {
   frontendReady$: Subscribable<void>
   session?: { open?: boolean } | null
   sessionChanged$?: Subscribable<unknown>
+  destroyed$?: Subscribable<void>
+  destroy?(): void | Promise<void>
 }
 
 export type SingleCommandRun =
-  | { ok: true; output: string; truncated: boolean }
+  | { ok: true; output: string; truncated: boolean; completionConfirmed: boolean }
   | { ok: false; reason: 'not_ready' | 'expired' | 'cancelled' }
 
 export function isSingleCommandTab(value: unknown): value is SingleCommandTab {
@@ -50,11 +52,19 @@ export async function runSingleSshCommand(input: {
   }
 
   const marker = `__tabby_secure_mcp_${input.markerNonce}__`
+  const markerPattern = new RegExp(`(?:^|\\r?\\n)${marker}\\r?\\n`)
   let output = ''
   let truncated = false
   let sawMarker = false
+  let markerAt = -1
   let notifyOutput: (() => void) | null = null
   const subscriptions: Subscription[] = []
+  const userSignal = input.signal
+  const controller = new AbortController()
+  const onAbort = (): void => controller.abort()
+  let tabDestroyed = false
+  userSignal?.addEventListener('abort', onAbort)
+  input = { ...input, signal: controller.signal }
 
   const append = (chunk: string): void => {
     if (sawMarker || truncated) {
@@ -63,20 +73,26 @@ export async function runSingleSshCommand(input: {
     const next = capUtf8(output + stripTerminalText(chunk), MAX_SSH_COMMAND_OUTPUT_BYTES)
     output = next.text
     truncated = next.truncated
-    if (output.includes(marker)) {
-      sawMarker = true
-    }
+    markerAt = output.search(markerPattern)
+    sawMarker = markerAt >= 0
     if (sawMarker || truncated) {
       notifyOutput?.()
     }
   }
 
   subscriptions.push(input.tab.output$.subscribe({ next: append }))
+  if (input.tab.destroyed$) {
+    const onDestroyed = (): void => {
+      tabDestroyed = true
+      controller.abort()
+    }
+    subscriptions.push(input.tab.destroyed$.subscribe({ next: onDestroyed, complete: onDestroyed }))
+  }
 
   try {
     const ready = await waitUntilSessionOpen(input)
     if (input.signal?.aborted) {
-      return { ok: false, reason: 'cancelled' }
+      return { ok: false, reason: tabDestroyed ? 'not_ready' : 'cancelled' }
     }
     if (!ready) {
       return input.clock.now() >= input.deadlineMonotonicMs
@@ -87,8 +103,10 @@ export async function runSingleSshCommand(input: {
     output = ''
     truncated = false
     sawMarker = false
-    input.tab.sendInput(`${input.command}\r`)
-    input.tab.sendInput(`printf '%s\\n' '${marker}'\r`)
+    // Split the marker so terminal input echo cannot confirm completion.
+    input.tab.sendInput(
+      `${input.command}; printf '\\n%s%s\\n' '__tabby_secure_mcp_' '${input.markerNonce}__'\r`,
+    )
 
     const finished = await waitForMarker({
       signal: input.signal,
@@ -101,28 +119,25 @@ export async function runSingleSshCommand(input: {
       },
     })
     if (finished === 'cancelled') {
-      return { ok: false, reason: 'cancelled' }
+      return { ok: false, reason: tabDestroyed ? 'not_ready' : 'cancelled' }
     }
     if (!sawMarker && !truncated) {
       return output.length > 0
-        ? { ok: true, output, truncated: true }
+        ? { ok: true, output, truncated: true, completionConfirmed: false }
         : { ok: false, reason: 'expired' }
     }
     return {
       ok: true,
-      output: outputBeforeMarker(output, marker),
+      output: sawMarker ? output.slice(0, markerAt) : output,
       truncated: truncated && !sawMarker,
+      completionConfirmed: sawMarker,
     }
   } finally {
+    userSignal?.removeEventListener('abort', onAbort)
     for (const subscription of subscriptions) {
       subscription.unsubscribe()
     }
   }
-}
-
-function outputBeforeMarker(output: string, marker: string): string {
-  const at = output.indexOf(marker)
-  return at >= 0 ? output.slice(0, at) : output
 }
 
 async function waitUntilSessionOpen(input: {

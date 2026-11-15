@@ -34,6 +34,7 @@ import {
   type ProfileSecuritySnapshot,
 } from './profile-security-snapshot'
 import { AuthorizedProfilesService } from '../services/authorized-profiles.service'
+import type { CommandSessionClosePolicy } from '../config/secure-mcp-config'
 
 export const APPROVAL_WINDOW_MS = 30_000
 const MAX_SEEN_REQUEST_IDS = 1024
@@ -116,6 +117,7 @@ export class ApprovalGatekeeper {
     private readonly leaseEpochSource: LeaseEpochSource,
     private readonly scheduler: ApprovalScheduler = new SystemApprovalScheduler(),
     private readonly memory?: AuthorizationMemory,
+    private readonly commandSessionClosePolicy: () => CommandSessionClosePolicy = () => 'keep',
   ) {
     crypto.getRandomValues(this.runKey)
   }
@@ -368,6 +370,7 @@ export class ApprovalGatekeeper {
   }
 
   async runAuthorizedSshCommand(request: SshCommandRequest): Promise<SshCommandResult> {
+    const closePolicy = this.commandSessionClosePolicy()
     if (request.signal?.aborted) {
       return { ok: false, code: 'cancelled' }
     }
@@ -469,6 +472,13 @@ export class ApprovalGatekeeper {
         return {
           ok: false,
           code: ran.reason === 'not_ready' ? 'target_unavailable' : ran.reason,
+        }
+      }
+      if (closePolicy === 'after-completion' && ran.completionConfirmed && !request.signal?.aborted) {
+        try {
+          await opened.destroy?.()
+        } catch {
+          console.warn('[Secure MCP] Could not close the completed command session.')
         }
       }
       return {

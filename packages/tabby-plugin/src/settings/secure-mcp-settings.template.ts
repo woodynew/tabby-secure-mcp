@@ -1,4 +1,22 @@
 export const secureMcpSettingsTemplate = `
+      <h3>Command sessions</h3>
+      <label for="command-session-close-policy">After a command finishes</label>
+      <select
+        id="command-session-close-policy"
+        class="form-select mb-2"
+        [value]="commandSessionClosePolicy"
+        [disabled]="saving || loading"
+        (change)="onClosePolicyChange($any($event.target).value, $any($event.target))"
+      >
+        <option value="keep">Keep session open (default)</option>
+        <option value="after-completion">Close when the command finishes</option>
+      </select>
+      <p class="text-muted">
+        Applies only to new sessions created for MCP commands. Sessions opened manually or with the
+        open-profile tool stay open. A timeout, cancellation, connection failure, or output limit
+        keeps the session open when command completion cannot be confirmed.
+      </p>
+
     <h3>Authorized SSH profiles</h3>
     <p class="text-muted">
       Select which non-built-in SSH profiles MCP may use. Credentials, hostnames, usernames, groups,
