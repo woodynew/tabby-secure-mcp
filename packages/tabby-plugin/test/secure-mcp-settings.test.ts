@@ -113,6 +113,7 @@ describe('Secure MCP settings grant management', () => {
       isTemplate: false,
     }
     const profilesService = {
+      getConfigProxyForProfile: (profile: any) => profile,
       getProfiles: vi.fn(async () => [profile]),
     }
     const store = new PermanentAuthorizationStore(config as never)

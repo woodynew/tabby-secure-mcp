@@ -1,171 +1,101 @@
-# Configure MCP clients for tabby-secure-mcp
+# Connect an AI tool to Tabby's MCP service
 
-Use the local stdio companion installed by `npm run install:local`. Do not use `npx`, `@latest`, shell wrappers, or HTTP transports for this server.
+Install the single Tabby plugin, restart Tabby, and use **Settings → Secure MCP** in its main window. No companion command, npx invocation, system Node path, stdio shim or external daemon is needed by the AI client.
 
-## Prerequisites
+## Connection requirements
 
-- **Node.js** `>= 20.19` on the same machine as Tabby and your MCP client.
-- **Tabby** running with the `tabby-secure-mcp` plugin loaded (restart Tabby after installing the plugin).
-- Install packages into Tabby’s plugins directory and capture the companion command:
+The AI tool must support **MCP Streamable HTTP** and a custom **Authorization** header. This local native-client service uses JSON responses, accepts POST/DELETE, and answers standalone GET with 405. Browser-origin requests and remote access are not supported. Client configuration field names vary; use its HTTP transport setup rather than a stdio command.
 
-```bash
-npm run install:local -- --plugins-dir "/absolute/path/to/tabby/plugins"
-```
+1. Add an SSH profile with a dedicated low-privilege test account and verify the connection manually.
+2. Whitelist it and choose `readonly` initially.
+3. Add a client credential with a meaningful name, such as “Work laptop agent”. Rename it in the list whenever needed; renaming does not change its token or grants.
+4. Enable the service. Copy the configuration for that client and enter its URL and header into the AI tool.
+5. Before connecting, set **MCP access authorization (pairing)** and **SSH connection authorization** on that client's card. Otherwise approve the requests when prompted. The credential name is your label; the additional client-declared name is unverified.
 
-The script prints two lines: the resolved plugins directory, then the **absolute path** to the `tabby-secure-mcp` companion binary. Use that path verbatim in client configuration.
+Client and SSH-open approval prompts allow **60 seconds**. Before showing a prompt, the plugin asks Tabby to bring the main window forward. If the OS cannot activate it, check Tabby manually. Focus, Escape, cancellation and timeout never grant permission; leaving the window while approval is open still rejects it.
 
-Default Tabby plugins locations (override with `--plugins-dir`):
+If the AI tool imposes a shorter request timeout, cancellation still ends approval earlier. Configure a tool-call timeout longer than 60 seconds in that client when you want the full approval window.
 
-| OS | Default plugins directory |
-| --- | --- |
-| Linux | `~/.config/tabby/plugins` |
-| macOS | `~/Library/Application Support/tabby/plugins` |
-| Windows | `%APPDATA%\tabby\plugins` (falls back to `%USERPROFILE%\AppData\Roaming\tabby\plugins`) |
-
-Companion binary after install:
-
-| OS | Example absolute command |
-| --- | --- |
-| Linux / macOS | `/home/you/.config/tabby/plugins/node_modules/.bin/tabby-secure-mcp` |
-| Windows | `C:\Users\you\AppData\Roaming\tabby\plugins\node_modules\.bin\tabby-secure-mcp.cmd` |
-
-## Behavior you should expect
-
-- The server exposes **four tools**: list authorized SSH profiles, open one authorized profile in a visible Tabby SSH tab, read that profile’s operation grant, and run one SSH command whose class fits the tier.
-- Starting the companion makes the Tabby plugin request **pairing**; no tool call can succeed until that pairing is approved.
-- The first **open** for a profile shows a **30 second** approval modal in Tabby. Allow remembers that open until you revoke it under **Settings → Secure MCP**, or until the profile’s security projection changes. Timeout, Escape, closing the modal, or Tabby losing focus denies that request and does not store a grant.
-- Operation tiers are chosen only in Tabby and authorize SSH commands: **低级 · 只读**, **中级 · 读写**, and **高级 · 完全控制**. A higher tier includes the SSH commands of every lower tier. `get_ssh_operation_authorization` reports the current tier and does not change it. `run_authorized_ssh_command` runs one command in a new visible tab when its class fits that tier. Pipes, redirects, command substitution, and newlines are rejected. Returned text is capped at 4096 bytes. A command that reads stdin can consume the completion marker, so the result may time out or come back truncated.
-- Profile listing and grant reads are **read-only**; whitelisting and tier changes happen only in Tabby settings.
-- **Tabby must be running** with the plugin active and the main window holding the companion lease for operations to succeed.
-
-Whitelist profiles under Tabby **Settings → Secure MCP** (authorized SSH profiles). Only non-template SSH profiles you explicitly enable appear in MCP list results.
-
-## Cursor
-
-- **User/global config:** `~/.cursor/mcp.json` on Linux and macOS (`%USERPROFILE%\.cursor\mcp.json` on Windows).
-- **Project config:** `.cursor/mcp.json` in the repository.
+Typical configuration shape (replace placeholders with the copied values; do not commit the token):
 
 ```json
 {
   "mcpServers": {
     "tabby-secure-mcp": {
-      "command": "/absolute/path/to/tabby/plugins/node_modules/.bin/tabby-secure-mcp",
-      "args": []
+      "url": "http://127.0.0.1:50333/mcp",
+      "headers": { "Authorization": "Bearer <client-token>" }
     }
   }
 }
 ```
 
-On Windows, use the `.cmd` shim with escaped backslashes in JSON:
+A client may require an explicit HTTP transport type or different surrounding JSON. The canonical connection data are the URL and Authorization header. No particular AI product/version is a prerequisite for acceptance; record whichever supported real client is used.
 
-```json
-{
-  "mcpServers": {
-    "tabby-secure-mcp": {
-      "command": "C:\\Users\\you\\AppData\\Roaming\\tabby\\plugins\\node_modules\\.bin\\tabby-secure-mcp.cmd",
-      "args": []
-    }
-  }
-}
-```
+## Client permission lifetime
 
-Restart Cursor or reload MCP servers after saving.
-
-## Claude Code (CLI)
-
-Add a user-scoped stdio server (replace the command with your install output):
-
-```bash
-claude mcp add --transport stdio --scope user tabby-secure-mcp -- \
-  /absolute/path/to/tabby/plugins/node_modules/.bin/tabby-secure-mcp
-```
-
-Inspect configured servers:
-
-```bash
-claude mcp list
-```
-
-Remove when needed:
-
-```bash
-claude mcp remove tabby-secure-mcp --scope user
-```
-
-Use the Windows `.cmd` path as the command argument on Windows.
-
-## Claude Desktop
-
-Edit the Claude Desktop MCP config file for your OS and add:
-
-| OS | Config path |
+| Choice | Behavior |
 | --- | --- |
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| This session | Current session only, up to 24 hours; not remembered after a reconnect/restart |
+| Remember 24 hours | Persists the original deadline; reconnecting does not extend it |
+| Permanent | Persists across reconnects and Tabby restarts until this credential is revoked/reset |
 
-Linux native Claude Desktop config paths are not documented here; use Claude Code or another supported client on Linux if Desktop is unavailable.
+Use separate credentials for different connection clients. Authorization binds credential ID and generation, never the label or self-declared product name. Revoking a client makes its old token unusable and aborts its requests. Resetting it gives a new token, clears remembered permission and requires approval again. Copy the replacement configuration afterwards. Other clients remain unaffected.
 
-```json
-{
-  "mcpServers": {
-    "tabby-secure-mcp": {
-      "command": "/absolute/path/to/tabby/plugins/node_modules/.bin/tabby-secure-mcp",
-      "args": []
-    }
-  }
-}
-```
+### Change or clear a client's permission
 
-Fully quit and restart Claude Desktop after changes.
+In the main window, open **Settings → Secure MCP → Named client credentials**, locate its name, choose **MCP access authorization (pairing)**, then click **Apply authorization**. This also works before the client's first connection:
 
-## Windsurf
-
-Edit the Windsurf MCP config file (create it if missing):
-
-| OS | Config path |
+| Choice | Result |
 | --- | --- |
-| Linux / macOS | `~/.codeium/windsurf/mcp_config.json` |
-| Windows | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` |
+| This session (next connection only) | Disconnects the current session and approves the next connection once, for up to 24 hours. Further reconnects need approval; restarting Tabby discards even an unused session grant. |
+| 24 hours from now | Disconnects the current session and saves a new 24-hour deadline, starting when Apply is clicked. |
+| Permanent | Disconnects the current session and saves permission until revoked, reset or changed. |
+| Clear authorization | Disconnects the current session, clears remembered/unused session permission and requires approval on the next connection. |
 
-```json
-{
-  "mcpServers": {
-    "tabby-secure-mcp": {
-      "command": "/absolute/path/to/tabby/plugins/node_modules/.bin/tabby-secure-mcp",
-      "args": []
-    }
-  }
-}
-```
+These four actions keep the token and client name: reconnect the AI tool using its existing configuration. Current in-flight requests are cancelled. If persistence fails, the client remains denied for the current Tabby run and the settings page asks you to retry before restarting. A later revocation always overrides an earlier permission update.
 
-On Windows, use the `.cmd` path with JSON escaping as in the Cursor example.
+**Revoke client** removes the credential entirely, so its old token cannot reconnect. **Reset credential** creates a new token and requires copying the updated MCP configuration. Other clients and SSH profile grants remain independent.
 
-## Troubleshooting
+Permanent client permission grants access to the MCP tools, not blanket SSH control. Whitelists, effective target digests, open approvals and command tiers apply on every request. Profile configuration changes can invalidate saved SSH grants independently of client permission.
 
-### Companion runtime directories
+## SSH connection authorization per client
 
-The stdio companion stores IPC metadata outside the Tabby plugins directory. Only remove files you recognize as stale **after** stopping every MCP client and confirming no `tabby-secure-mcp` companion process is running. Do not delete artifacts belonging to a live companion PID.
+Each named client's card lists the globally whitelisted SSH profiles under **SSH connection authorization**. Select **Permanently allow** or **Ask when used**, then click **Apply connection authorization**. A client does not need to be online, or to have connected previously, to receive this permission.
 
-| OS | Runtime directory | Typical files |
-| --- | --- | --- |
-| Linux | `$XDG_RUNTIME_DIR/tabby-secure-mcp` or `/tmp/tabby-secure-mcp` | `descriptor.json`, `companion.lock`, `companion.sock` |
-| macOS | `$TMPDIR/tabby-secure-mcp` (for example `/var/folders/.../tabby-secure-mcp`) | `descriptor.json`, `companion.lock`, `companion.sock` |
-| Windows | `%LOCALAPPDATA%\tabby-secure-mcp` | `descriptor.json`, `companion.lock` (named pipe endpoint; do not delete pipes manually) |
+- **Permanently allow** remembers permission for this credential and profile, including across Tabby restarts. Both opening an SSH tab and running a command that creates a tab check it. Command tiers remain separately enforced.
+- **Ask when used** clears the saved permission. The next applicable tool call shows the connection approval dialog; Allow saves permission only for that client and profile. Reject, cancellation, blur and timeout do not grant permission.
+- **Profile changed — authorization required** means its saved security digest no longer matches. Review the profile, select Permanently allow, and apply again, or approve its next request.
 
-### Fail-closed installer safety
+Clients with identical names remain independent. Renaming a client or editing its pairing lifetime retains its SSH connection permissions. Resetting its credential clears both pairing and connection permissions; revoking it deletes them. Revocation prevents pending requests from opening connections or sending commands, but cannot undo a command already sent to the remote machine.
 
-`install:local` refuses to modify runtime artifacts when the descriptor or lock is a symbolic link, malformed, oversize, or paired with a live companion PID (including lock-only startup). **Rerunning the installer does not automatically repair corruption** in those cases. Stop all companion clients, end stray `tabby-secure-mcp` processes, manually inspect the runtime directory above, remove only the known stale files when no live PID holds them, then rerun install.
+The former profile-wide remembered-open grants are not inherited by clients. Existing whitelist selections and command tiers remain; set the new per-client permissions or use the next approval dialog. The private credential format upgrades from version 1 to version 2 on the next successful save without rotating tokens. Older plugin versions cannot read version 2; preserve a private backup before attempting a downgrade.
 
-When cleanup is allowed (dead PIDs only), the installer may remove stale `descriptor.json`, `companion.lock`, and the Unix socket. It never deletes Windows named pipes.
+`get_ssh_operation_authorization` reports `open_session` for the authenticated client and target. It never changes permission. Failed persistence remains visible in settings, and failed revocations remain denied for the running instance until safely saved.
 
-| Symptom | What to try |
-| --- | --- |
-| Installer refuses to run | Follow **Fail-closed installer safety** above. Quit MCP clients, stop companion processes, inspect the runtime directory manually, then rerun `install:local`. |
-| Pairing never appears | Confirm Tabby is open, the plugin is installed under the plugins directory Tabby loads, and you restarted Tabby after install. |
-| Opens always denied | Check the 30s modal in Tabby, whitelist the profile in Secure MCP settings, and ensure you are approving the correct client. |
-| Stale IPC after crashes | Only when the installer reports a cleanable stale state: rerun `npm run install:local`. Otherwise use manual runtime cleanup (see above). On Windows, named pipes are not deleted by the installer. |
-| Wrong server version | Reinstall with `npm run install:local` so `tabby-secure-mcp` and `@tabby-secure-mcp/companion` stay at the same pinned version (`0.1.0`). |
+## First calls
 
-## Validation scope
+Ask the AI tool to call these in order:
 
-Client JSON shapes above follow published MCP stdio configuration patterns. **macOS and Windows** builds are exercised in CI (unit, integration, pack checks). The full flow is manually validated on **Linux with Tabby 1.0.238**; automated CI does not certify a specific Cursor, Claude, or Windsurf client version—retest after client upgrades.
+1. `list_authorized_ssh_profiles` — only explicitly whitelisted names/references should appear.
+2. `get_ssh_operation_authorization` for the returned reference.
+3. `open_authorized_ssh_profile` — approve the visible Tabby prompt if required.
+4. `run_authorized_ssh_command` with `whoami`, `id` or `pwd`.
+
+Commands use a new visible tab and never read an existing terminal. Output is capped at 4096 UTF-8 bytes and execution collection at 45 seconds. See the README for allowed low/medium argument combinations; shell expansion/globbing is not performed.
+
+## Errors and recovery
+
+- `not_approved`: approve the client or applicable open request, or review the SSH tier. Denial, Escape, blur and timeout do not grant permission.
+- `audit_unavailable`: required audit failed before dispatch; repair storage before trying again.
+- `outcome_unknown`: the operation may already have happened. Inspect the newly created tab and remote state; do not automatically retry.
+- Session 404 after restart: reconnect using the same credential. Permanent/unexpired 24-hour permission is restored; a session-only grant requires a new approval.
+- Re-list authorized profiles after reconnect/restart; opaque profile references are not a persistent identifier.
+- A connection with an operation still in flight cannot be replaced by another session for that credential; finish/cancel it first.
+- Main window closed or port busy: reopen the main window or choose an available port and copy updated client configuration. No automatic window takeover or process killing occurs.
+- Private credential storage failure: preserve evidence and restore safe storage/permissions; retry failed revocations before restart. Do not delete a pending update marker without an offline ownership/state check.
+
+Old `command`/`args` stdio entries must be disabled manually. Stop any old companion before installation; the installer does not reclaim its locks. Keep unrelated MCP servers and plugins intact.
+
+## Acceptance evidence
+
+A real AI client must actually invoke all four tools against the isolated test target. Record client/version, agreed protocol, expected results, reconnect/permanent restoration, revoke/cancel and audit-refusal evidence. SDK tests supplement this with protocol and failure cases. They do not alone certify AI-tool acceptance or every client on every platform.

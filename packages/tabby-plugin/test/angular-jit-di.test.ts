@@ -35,7 +35,7 @@ describe('Angular JIT constructor injection (Tabby host)', () => {
     expect(memory).not.toMatch(/import type \{[^}]*ConfigService[^}]*\} from 'tabby-core'/)
 
     const lifecycle = readSource('runtime/plugin-runtime-lifecycle.ts')
-    expect(lifecycle).toMatch(/@Inject\(PluginRuntimeService\)/)
+    expect(lifecycle).toMatch(/@Inject\(PluginHttpRuntime\)/)
 
     const audit = readSource('audit/audit-service.ts')
     expect(audit).toMatch(/constructor\(\)/)

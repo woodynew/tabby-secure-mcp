@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -35,17 +36,21 @@ export function parseNpmPackJson(stdout) {
   return record
 }
 
-export function resolveNpmLauncher(platform = process.platform) {
-  if (platform === 'win32') {
-    return { command: 'npm.cmd', shell: true }
-  }
-  return { command: 'npm', shell: false }
+export function resolveNpmLauncher(_platform = process.platform) {
+  const candidates = [
+    process.env.npm_execpath && path.join(path.dirname(process.env.npm_execpath), 'npm-cli.js'),
+    path.resolve(path.dirname(process.execPath), '../lib/node_modules/npm/bin/npm-cli.js'),
+    path.join(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'),
+  ]
+  const cli = candidates.find(candidate => candidate && existsSync(candidate))
+  if (!cli) throw new Error('Cannot locate npm-cli.js. Run this command through npm run.')
+  return { command: process.execPath, args: [cli], shell: false }
 }
 
 export function runCommand(command, args, options = {}) {
   const launched = command === 'npm' ? resolveNpmLauncher() : { command, shell: false }
   return new Promise((resolve, reject) => {
-    const child = spawn(launched.command, args, {
+    const child = spawn(launched.command, [...(launched.args ?? []), ...args], {
       cwd: options.cwd ?? repoRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: options.env ?? process.env,

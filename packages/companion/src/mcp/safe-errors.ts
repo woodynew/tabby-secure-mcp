@@ -8,8 +8,10 @@ const SAFE_ERROR_TEXT: Record<ErrorCode, string> = {
   cancelled: 'The operation was cancelled.',
   busy: 'Too many operations are already in progress.',
   rate_limited: 'Too many operations were requested in a short period.',
-  plugin_unavailable: 'Tabby is not connected or paired with this companion.',
-  internal: 'The companion could not complete the operation.',
+  plugin_unavailable: 'The Tabby MCP service is unavailable or this client is not approved.',
+  internal: 'The Tabby MCP service could not complete the operation.',
+  audit_unavailable: 'Audit persistence is unavailable. The operation was not executed.',
+  outcome_unknown: 'The operation may have executed. Check the new Tabby tab before retrying; do not retry automatically.',
 }
 
 export function safeErrorText(code: ErrorCode): string {

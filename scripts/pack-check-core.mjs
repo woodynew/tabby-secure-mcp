@@ -1,14 +1,15 @@
-import { createReadStream } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { builtinModules } from 'node:module'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { createGunzip } from 'node:zlib'
+import { gunzip } from 'node:zlib'
+import { promisify } from 'node:util'
+import { buildSync } from 'esbuild'
 
 import { packWorkspacePackage } from './npm-pack-utils.mjs'
 
 export const EXPECTED_VERSION = '0.1.0'
 export const PLUGIN_PACKAGE_NAME = 'tabby-secure-mcp'
-export const COMPANION_PACKAGE_NAME = '@tabby-secure-mcp/companion'
 export const TABBY_PLUGIN_KEYWORD = 'tabby-plugin'
 
 /** Mirrors Tabby plugins_11.ts parsePluginInfo author normalization. */
@@ -18,15 +19,6 @@ export function resolveTabbyPluginAuthor(manifest) {
     throw new Error('plugin package.json must declare author for Tabby discovery')
   }
   return author.name || author
-}
-
-export function assertCompanionLaunchMode({ mode, platform, bin }) {
-  if (!bin || bin['tabby-secure-mcp'] !== './dist/cli.js') {
-    throw new Error('companion package.json bin must point at ./dist/cli.js')
-  }
-  if (platform !== 'win32' && (mode & 0o111) === 0) {
-    throw new Error('companion CLI tarball entry is not marked executable')
-  }
 }
 
 export function assertTabbyPluginDiscoveryManifest(manifest, label = 'plugin') {
@@ -40,16 +32,8 @@ export function assertTabbyPluginDiscoveryManifest(manifest, label = 'plugin') {
   }
 }
 
-async function readEntireStream(stream) {
-  const chunks = []
-  for await (const chunk of stream) {
-    chunks.push(chunk)
-  }
-  return Buffer.concat(chunks)
-}
-
 export async function gunzipFile(filePath) {
-  return readEntireStream(createReadStream(filePath).pipe(createGunzip()))
+  return promisify(gunzip)(await readFile(filePath))
 }
 
 function parseTarHeaders(buffer) {
@@ -119,14 +103,6 @@ export function assertPackManifest(manifest, label) {
   if (manifest.version !== EXPECTED_VERSION) {
     throw new Error(`${label} tarball version must be ${EXPECTED_VERSION}`)
   }
-  if (label === 'companion') {
-    for (const section of ['dependencies', 'optionalDependencies']) {
-      const deps = manifest[section]
-      if (deps && typeof deps === 'object' && Object.keys(deps).length > 0) {
-        throw new Error('companion tarball must not declare runtime dependencies')
-      }
-    }
-  }
   const dependencySections = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
   for (const section of dependencySections) {
     const deps = manifest[section]
@@ -139,6 +115,14 @@ export function assertPackManifest(manifest, label) {
       }
       if (specifier.startsWith('workspace:') || specifier.startsWith('file:')) {
         throw new Error(`${label} tarball must not declare ${section}.${name}=${specifier}`)
+      }
+    }
+  }
+  if (label === 'plugin') {
+    for (const section of ['dependencies', 'optionalDependencies']) {
+      const deps = manifest[section]
+      if (deps && typeof deps === 'object' && Object.keys(deps).length > 0) {
+        throw new Error('self-contained plugin tarball must not declare runtime dependencies')
       }
     }
   }
@@ -170,6 +154,29 @@ export function packTar(files) {
   return Buffer.concat(chunks)
 }
 
+export function assertPluginBundle(bundle) {
+  if (!/module\.exports/.test(bundle) || !/define\.amd/.test(bundle)) {
+    throw new Error('plugin bundle is missing a UMD export signature')
+  }
+  const { metafile } = buildSync({
+    stdin: { contents: bundle, loader: 'js', sourcefile: 'plugin.cjs' },
+    bundle: true,
+    platform: 'node',
+    external: ['*'],
+    write: false,
+    metafile: true,
+    logLevel: 'silent',
+  })
+  for (const { path: request } of Object.values(metafile.outputs).flatMap(output => output.imports)) {
+    if (request.startsWith('node:')) {
+      throw new Error('plugin bundle must not require node: protocol builtins (Tabby host uses unprefixed requires)')
+    }
+    if (!builtinModules.includes(request) && !/^(?:@angular\/|@ng-bootstrap\/|rxjs(?:\/|$)|tabby-(?:core|settings)(?:\/|$))/.test(request)) {
+      throw new Error('plugin bundle is not self-contained: unbundled external ' + request)
+    }
+  }
+}
+
 export async function inspectPackedTarball(options = {}) {
   const packDir =
     options.packDir ?? await mkdtemp(path.join(tmpdir(), 'tabby-secure-mcp-pack-check-'))
@@ -178,64 +185,28 @@ export async function inspectPackedTarball(options = {}) {
   try {
     if (options.runPack ?? true) {
       await packWorkspacePackage('packages/tabby-plugin', packDir)
-      await packWorkspacePackage('packages/companion', packDir)
     }
 
     const pluginPath = path.join(packDir, `tabby-secure-mcp-${EXPECTED_VERSION}.tgz`)
-    const companionPath = path.join(packDir, `tabby-secure-mcp-companion-${EXPECTED_VERSION}.tgz`)
 
     const pluginEntries = await listTarballEntries(pluginPath)
-    const companionEntries = await listTarballEntries(companionPath)
     assertAllowedEntries(pluginEntries, 'plugin', ['dist/index.js', 'package.json'])
-    assertAllowedEntries(companionEntries, 'companion', ['dist/cli.js', 'package.json'])
 
     const pluginManifest = await listPackageJsonFromTarball(pluginPath)
-    const companionManifest = await listPackageJsonFromTarball(companionPath)
     assertPackManifest(pluginManifest, 'plugin')
     assertTabbyPluginDiscoveryManifest(pluginManifest, 'plugin')
-    assertPackManifest(companionManifest, 'companion')
     if (pluginManifest.name !== PLUGIN_PACKAGE_NAME) {
       throw new Error('plugin tarball name mismatch')
     }
-    if (companionManifest.name !== COMPANION_PACKAGE_NAME) {
-      throw new Error('companion tarball name mismatch')
-    }
-
     const pluginBundle = (await readTarEntry(pluginPath, 'dist/index.js')).data.toString('utf8')
-    const companionCliRecord = await readTarEntry(companionPath, 'dist/cli.js')
-    const companionShebang = companionCliRecord.data.subarray(0, 20).toString('utf8')
-
+    assertPluginBundle(pluginBundle)
     const result = {
       plugin: {
         version: pluginManifest.version,
         entries: pluginEntries,
         bundle: pluginBundle,
       },
-      companion: {
-        version: companionManifest.version,
-        entries: companionEntries,
-        shebang: companionShebang.startsWith('#!/usr/bin/env node')
-          ? companionShebang.slice(0, companionShebang.indexOf('\n') + 1)
-          : companionShebang,
-        mode: companionCliRecord.mode,
-        bin: companionManifest.bin,
-      },
     }
-
-    if (!result.plugin.bundle.match(/webpackUniversalModuleDefinition|module\.exports/)) {
-      throw new Error('plugin bundle is missing a UMD export signature')
-    }
-    if (/require\(["']node:/.test(result.plugin.bundle)) {
-      throw new Error('plugin bundle must not require node: protocol builtins (Tabby host uses unprefixed requires)')
-    }
-    if (!result.companion.shebang.startsWith('#!/usr/bin/env node')) {
-      throw new Error('companion CLI is missing a Node shebang')
-    }
-    assertCompanionLaunchMode({
-      mode: result.companion.mode,
-      platform: process.platform,
-      bin: result.companion.bin,
-    })
 
     return result
   } finally {

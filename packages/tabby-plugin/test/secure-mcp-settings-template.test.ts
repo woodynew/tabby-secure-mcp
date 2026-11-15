@@ -7,7 +7,7 @@ describe('Secure MCP settings template', () => {
     const interpolations = secureMcpSettingsTemplate.match(/\{\{[^}]+\}\}/g) ?? []
     const rowInterpolations = interpolations.filter(chunk => chunk.includes('row.'))
 
-    expect(rowInterpolations).toEqual(['{{ row.displayName }}'])
+    expect([...new Set(rowInterpolations)]).toEqual(['{{ row.displayName }}'])
     expect(secureMcpSettingsTemplate).not.toMatch(/\{\{\s*row\.id/)
     expect(secureMcpSettingsTemplate).not.toMatch(/\{\{\s*row\.options/)
     expect(secureMcpSettingsTemplate).not.toMatch(/\{\{[^}]*(host|username|user)[^}]*\}\}/i)

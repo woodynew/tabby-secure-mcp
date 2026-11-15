@@ -1,16 +1,21 @@
 import { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
-import type { PluginGateway } from '../gateway/plugin-gateway.js'
-import { DEFAULT_RPC_DEADLINE_MS } from '../gateway/plugin-gateway.js'
+import type { ErrorCode, OperationalRequest } from '@tabby-secure-mcp/ipc-contract'
 import { safeErrorText, toMcpToolError, toMcpToolSuccess } from './safe-errors.js'
 
 function readDeadlineMs(): number {
   const fromEnv = Number(process.env.TABBY_SECURE_MCP_RPC_DEADLINE_MS)
-  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_RPC_DEADLINE_MS
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 30_000
 }
 
-export function createMcpServer(gateway: PluginGateway): McpServer {
+export interface McpDispatcher {
+  call(request: OperationalRequest, options?: { signal?: AbortSignal; deadlineMs?: number }): Promise<
+    { ok: true; result: Record<string, unknown> } | { ok: false; code: ErrorCode }
+  >
+}
+
+export function createMcpServer(gateway: McpDispatcher): McpServer {
   const server = new McpServer(
     { name: 'tabby-secure-mcp', version: '0.1.0' },
     { capabilities: { tools: {} } },
@@ -108,7 +113,7 @@ export function createMcpServer(gateway: PluginGateway): McpServer {
         'Run one SSH command on an authorized profile. The command class must fit the Tabby tier: read-only, read-write, or full control. Shell operators are rejected.',
       inputSchema: z.strictObject({
         profile_ref: z.string().min(1).max(256),
-        command: z.string().min(1).max(512),
+        command: z.string().min(1).max(512).refine(value => Buffer.byteLength(value, 'utf8') <= 512),
       }),
       outputSchema: z.object({
         status: z.enum(['completed', 'truncated']),

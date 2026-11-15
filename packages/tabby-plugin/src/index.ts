@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common'
-import { Inject, NgModule } from '@angular/core'
+import { Inject, NgModule, NgZone } from '@angular/core'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
-import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ProfilesService } from 'tabby-core'
+import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ConfigService, ProfilesService, type BaseTabComponent } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
 import { AuditService } from './audit/audit-service'
@@ -15,7 +15,7 @@ import { PairingApprovalModalComponent } from './approval/pairing-approval-modal
 import { SecureMcpConfigProvider } from './config/secure-mcp-config-provider'
 import { normalizeWindowBootstrap } from './runtime/bootstrap-data'
 import { PluginRuntimeLifecycle } from './runtime/plugin-runtime-lifecycle'
-import { PluginRuntimeService } from './runtime/plugin-runtime-service'
+import { PluginHttpRuntime } from './runtime/plugin-http-runtime'
 import { RuntimeLeaseState } from './runtime/runtime-lease-state'
 import { AuthorizedProfilesService } from './services/authorized-profiles.service'
 import { SecureMcpSettingsComponent } from './settings/secure-mcp-settings.component'
@@ -42,6 +42,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         presenter: NgBootstrapApprovalPresenter,
         leaseState: RuntimeLeaseState,
         memory: PermanentAuthorizationStore,
+        audit: AuditService,
       ) =>
         new ApprovalGatekeeper(
           authorizedProfiles,
@@ -51,6 +52,7 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
           () => leaseState.getLeaseEpoch(),
           new SystemApprovalScheduler(),
           memory,
+          { audit, closeTab: async tab => { (tab as BaseTabComponent).destroy() } },
         ),
       deps: [
         AuthorizedProfilesService,
@@ -58,25 +60,32 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         NgBootstrapApprovalPresenter,
         RuntimeLeaseState,
         PermanentAuthorizationStore,
+        AuditService,
       ],
     },
     {
-      provide: PluginRuntimeService,
+      provide: PluginHttpRuntime,
       useFactory: (
         bootstrapData: BootstrapData,
         leaseState: RuntimeLeaseState,
         gatekeeper: ApprovalGatekeeper,
         authorizedProfiles: AuthorizedProfilesService,
         audit: AuditService,
+        config: ConfigService,
+        presenter: NgBootstrapApprovalPresenter,
+        zone: NgZone,
       ) =>
-        new PluginRuntimeService(
+        new PluginHttpRuntime(
+          config,
           () => normalizeWindowBootstrap(bootstrapData),
           leaseState,
           gatekeeper,
           authorizedProfiles,
           audit,
+          presenter,
+          { notify: work => zone.run(work) },
         ),
-      deps: [BOOTSTRAP_DATA, RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService],
+      deps: [BOOTSTRAP_DATA, RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService, ConfigService, NgBootstrapApprovalPresenter, NgZone],
     },
     PluginRuntimeLifecycle,
     { provide: ConfigProvider, useClass: SecureMcpConfigProvider, multi: true },

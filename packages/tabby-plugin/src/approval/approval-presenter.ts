@@ -12,6 +12,7 @@ export interface PairingApprovalViewModel {
   clientIdentity: string
   companionLabel: string
   remainingSeconds: number
+  allowDuration?: boolean
 }
 
 export interface OpenApprovalViewModel {

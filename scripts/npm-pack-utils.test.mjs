@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { parseNpmPackJson, resolveNpmLauncher } from './npm-pack-utils.mjs'
 
 describe('resolveNpmLauncher', () => {
-  it('launches npm through cmd on Windows', () => {
-    expect(resolveNpmLauncher('win32')).toEqual({ command: 'npm.cmd', shell: true })
-    expect(resolveNpmLauncher('linux')).toEqual({ command: 'npm', shell: false })
+  it('launches npm JavaScript through Node without a shell on every platform', () => {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      const launcher = resolveNpmLauncher(platform)
+      expect(launcher.command).toBe(process.execPath)
+      expect(launcher.shell).toBe(false)
+      expect(launcher.args[0]).toMatch(/npm-cli\.js$/)
+    }
   })
 })
 

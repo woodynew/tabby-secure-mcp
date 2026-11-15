@@ -1,4 +1,5 @@
 import { isProfileRef } from '../profiles/profile-ref'
+import { APPROVAL_WINDOW_MS } from '@tabby-secure-mcp/companion'
 
 const REQUEST_ID_PATTERN = /^[0-9a-fA-F]{32}$/
 const OPEN_TOOL_NAME = 'open_authorized_ssh_profile'
@@ -47,6 +48,6 @@ export function validateOpenApprovalRequest(input: {
 }
 
 export function computeEffectiveOpenDeadline(receivedAtMonotonicMs: number, callerDeadlineMonotonicMs: number): number {
-  const windowCap = receivedAtMonotonicMs + 30_000
+  const windowCap = receivedAtMonotonicMs + APPROVAL_WINDOW_MS
   return Math.min(callerDeadlineMonotonicMs, windowCap)
 }
