@@ -16,12 +16,12 @@ export interface SecureMcpSettingsRow {
 
 export const SETTINGS_OPERATION_TIER_OPTIONS: ReadonlyArray<{
   value: GrantedOperationTier
-  label: string
+  labelKey: string
 }> = [
-  { value: 'none', label: '未授予' },
-  { value: 'readonly', label: '低级 · 只读' },
-  { value: 'readwrite', label: '中级 · 读写' },
-  { value: 'full', label: '高级 · 完全控制' },
+  { value: 'none', labelKey: 'secureMcp.tierNone' },
+  { value: 'readonly', labelKey: 'secureMcp.tierReadOnly' },
+  { value: 'readwrite', labelKey: 'secureMcp.tierReadWrite' },
+  { value: 'full', labelKey: 'secureMcp.tierFull' },
 ]
 
 export function buildSecureMcpSettingsRows(

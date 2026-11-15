@@ -5,30 +5,30 @@ import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
   selector: 'secure-mcp-pairing-approval-modal',
   template: `
     <div class="modal-header">
-      <h4 class="modal-title">Approve MCP client connection</h4>
-      <button type="button" class="btn-close" aria-label="Close" (click)="reject('dismiss')"></button>
+      <h4 class="modal-title">{{ 'secureMcp.approvePairing' | translate }}</h4>
+      <button type="button" class="btn-close" [attr.aria-label]="'secureMcp.close' | translate" (click)="reject('dismiss')"></button>
     </div>
     <div class="modal-body">
-      <p>A local MCP client is requesting access. Its declared name is not verified program identity.</p>
+      <p>{{ 'secureMcp.pairingRequested' | translate }}</p>
       <dl>
-        <dt>Credential name</dt>
+        <dt>{{ 'secureMcp.credentialName' | translate }}</dt>
         <dd>{{ clientIdentity }}</dd>
-        <dt>Declared client name</dt>
+        <dt>{{ 'secureMcp.declaredClientName' | translate }}</dt>
         <dd>{{ companionLabel }}</dd>
       </dl>
       <label *ngIf="allowDuration" class="d-block">
-        Remember this client
+        {{ 'secureMcp.rememberClient' | translate }}
         <select [value]="duration" (change)="duration = $any($event.target).value">
-          <option value="session">This session only (up to 24 hours)</option>
-          <option value="24h">Remember for 24 hours</option>
-          <option value="permanent">Permanent — until revoked</option>
+          <option value="session">{{ 'secureMcp.sessionOnly' | translate }}</option>
+          <option value="24h">{{ 'secureMcp.remember24Hours' | translate }}</option>
+          <option value="permanent">{{ 'secureMcp.permanentPermission' | translate }}</option>
         </select>
       </label>
-      <p>Time remaining: {{ remainingSeconds }}s</p>
+      <p>{{ 'secureMcp.timeRemaining' | translate:{ seconds: remainingSeconds } }}</p>
     </div>
     <div class="modal-footer">
-      <button type="button" class="btn btn-outline-danger" ngbAutofocus (click)="reject('reject')">Reject</button>
-      <button type="button" class="btn btn-primary" (click)="allow()">Allow</button>
+      <button type="button" class="btn btn-outline-danger" ngbAutofocus (click)="reject('reject')">{{ 'secureMcp.reject' | translate }}</button>
+      <button type="button" class="btn btn-primary" (click)="allow()">{{ 'secureMcp.allow' | translate }}</button>
     </div>
   `,
 })

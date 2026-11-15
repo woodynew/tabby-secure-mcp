@@ -10,7 +10,7 @@ interface Subscription {
 }
 
 interface Subscribable<T> {
-  subscribe(observer: { next?: (value: T) => void }): Subscription
+  subscribe(observer: { next?: (value: T) => void; complete?: () => void }): Subscription
 }
 
 export interface SingleCommandTab {
@@ -19,10 +19,12 @@ export interface SingleCommandTab {
   frontendReady$: Subscribable<void>
   session?: { open?: boolean } | null
   sessionChanged$?: Subscribable<unknown>
+  destroyed$?: Subscribable<void>
+  destroy?(): void | Promise<void>
 }
 
 export type SingleCommandRun =
-  | { ok: true; output: string; truncated: boolean }
+  | { ok: true; output: string; truncated: boolean; completionConfirmed: boolean }
   | { ok: false; reason: 'not_ready' | 'expired' | 'cancelled' | 'not_approved' | 'audit_unavailable' | 'target_unavailable'; started?: boolean }
 
 export function isSingleCommandTab(value: unknown): value is SingleCommandTab {
@@ -54,6 +56,12 @@ export async function runSingleSshCommand(input: {
   let collector = new CommandOutputCollector(input.markerNonce, MAX_SSH_COMMAND_OUTPUT_BYTES)
   let notifyOutput: (() => void) | null = null
   const subscriptions: Subscription[] = []
+  const userSignal = input.signal
+  const controller = new AbortController()
+  const onAbort = (): void => controller.abort()
+  let tabDestroyed = false
+  userSignal?.addEventListener('abort', onAbort)
+  input = { ...input, signal: controller.signal }
 
   const append = (chunk: string): void => {
     collector.push(chunk)
@@ -63,11 +71,18 @@ export async function runSingleSshCommand(input: {
   }
 
   subscriptions.push(input.tab.output$.subscribe({ next: append }))
+  if (input.tab.destroyed$) {
+    const onDestroyed = (): void => {
+      tabDestroyed = true
+      controller.abort()
+    }
+    subscriptions.push(input.tab.destroyed$.subscribe({ next: onDestroyed, complete: onDestroyed }))
+  }
 
   try {
     const ready = await waitUntilSessionOpen(input)
     if (input.signal?.aborted) {
-      return { ok: false, reason: 'cancelled' }
+      return { ok: false, reason: tabDestroyed ? 'not_ready' : 'cancelled' }
     }
     if (!ready) {
       return input.clock.now() >= input.deadlineMonotonicMs
@@ -102,20 +117,22 @@ export async function runSingleSshCommand(input: {
       },
     })
     if (finished === 'cancelled') {
-      return { ok: false, reason: 'cancelled', started: true }
+      return { ok: false, reason: tabDestroyed ? 'not_ready' : 'cancelled', started: true }
     }
     if (input.tab.session !== session || !session?.open) return { ok: false, reason: 'not_approved', started: true }
     if (!collector.complete && !collector.truncated) {
       return collector.output.length > 0
-        ? { ok: true, output: collector.output, truncated: true }
+        ? { ok: true, output: collector.output, truncated: true, completionConfirmed: false }
         : { ok: false, reason: 'expired', started: true }
     }
     return {
       ok: true,
       output: collector.output,
       truncated: collector.truncated && !collector.complete,
+      completionConfirmed: collector.complete,
     }
   } finally {
+    userSignal?.removeEventListener('abort', onAbort)
     for (const subscription of subscriptions) {
       subscription.unsubscribe()
     }

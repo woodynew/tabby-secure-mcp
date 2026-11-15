@@ -2,6 +2,8 @@ import type { ConfigService } from 'tabby-core'
 
 import type { GrantedOperationTier } from '../authorization/operation-tier-policy'
 
+export type CommandSessionClosePolicy = 'keep' | 'after-completion'
+
 export interface StoredPermanentAuthorization {
   profileId: string
   openSession: boolean
@@ -15,6 +17,7 @@ export type SecureMcpConfigStore = {
     http?: { enabled: boolean; port: number }
     authorizedSshProfileIds: string[]
     permanentAuthorizations: StoredPermanentAuthorization[]
+    commandSessionClosePolicy: CommandSessionClosePolicy
   }
 }
 
@@ -23,7 +26,36 @@ export const secureMcpConfigDefaults = {
     http: { enabled: false, port: 50333 },
     authorizedSshProfileIds: [] as string[],
     permanentAuthorizations: [] as StoredPermanentAuthorization[],
+    commandSessionClosePolicy: 'keep' as CommandSessionClosePolicy,
   },
+}
+
+export function readCommandSessionClosePolicy(store: unknown): CommandSessionClosePolicy {
+  const policy = (store as { secureMcp?: { commandSessionClosePolicy?: unknown } } | null)
+    ?.secureMcp?.commandSessionClosePolicy
+  return policy === 'after-completion' ? policy : 'keep'
+}
+
+export async function persistCommandSessionClosePolicy(
+  config: Pick<ConfigService, 'store' | 'save'>,
+  policy: CommandSessionClosePolicy,
+): Promise<CommandSessionClosePolicy> {
+  const store = config.store as SecureMcpConfigStore
+  if (!store?.secureMcp) {
+    throw new Error('secureMcp config section is unavailable')
+  }
+  const previous = readCommandSessionClosePolicy(store)
+  try {
+    store.secureMcp.commandSessionClosePolicy = policy
+    await config.save()
+    if (readCommandSessionClosePolicy(store) !== policy) {
+      throw new Error('command session close policy did not persist')
+    }
+    return policy
+  } catch (error) {
+    store.secureMcp.commandSessionClosePolicy = previous
+    throw error
+  }
 }
 
 export function dedupeAuthorizedSshProfileIds(ids: readonly unknown[]): string[] {

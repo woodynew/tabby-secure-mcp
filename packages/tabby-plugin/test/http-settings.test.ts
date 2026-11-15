@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 vi.mock('@tabby-secure-mcp/companion', () => ({ APPROVAL_WINDOW_MS: 60_000, CredentialStore: class {}, EmbeddedMcpServer: class {} }))
+import { SECURE_MCP_EN } from '../src/i18n/messages'
 import { SecureMcpSettingsComponent } from '../src/settings/secure-mcp-settings.component'
 import { CredentialStore } from '../../companion/src/http/credentials'
 import { PermanentAuthorizationStore } from '../src/authorization/permanent-authorization-store'
@@ -48,11 +49,32 @@ describe('named MCP credentials in settings', () => {
     const component = new SecureMcpSettingsComponent({} as never, {} as never, {} as never, runtime as never)
     await component.onChangeClientPermission('id', 2, 'session')
     expect(credentials.setPermission).toHaveBeenCalledWith('id', 2, 'session')
-    expect(component.notice).toContain('next connection')
-    expect(component.notice).toContain('unchanged')
+    expect(component.notice).toBe('secureMcp.sessionPermissionNotice')
+    expect(SECURE_MCP_EN.sessionPermissionNotice).toContain('next connection')
+    expect(SECURE_MCP_EN.sessionPermissionNotice).toContain('unchanged')
     await component.onChangeClientPermission('id', 3, 'untrusted')
     expect(credentials.setPermission).toHaveBeenCalledTimes(1)
   })
+  it('keeps permission state separate from its translated display text', () => {
+    const sessions: Array<{ clientId: string; state: string; duration: string }> = []
+    const component = new SecureMcpSettingsComponent({} as never, {} as never, {} as never,
+      { sessions: () => sessions } as never)
+    const client = { id: 'client', permission: { kind: 'session' } } as any
+    expect(component.clientPermission(client)).toBe('secureMcp.sessionPermissionPending')
+    expect(component.clientPermissionChoice(client)).toBe('session')
+    client.permission = { kind: 'until', expiresAt: Date.now() + 86400000 }
+    expect(component.clientPermission(client)).toBe('secureMcp.untilPermission')
+    expect(component.clientPermissionChoice(client)).toBe('24h')
+    client.permission = { kind: 'permanent' }
+    expect(component.clientPermission(client)).toBe('secureMcp.permanentPermission')
+    expect(component.clientPermissionChoice(client)).toBe('permanent')
+    client.permission = { kind: 'none' }
+    expect(component.clientPermission(client)).toBe('secureMcp.noRememberedPermission')
+    sessions.push({ clientId: client.id, state: 'approved', duration: 'session' })
+    expect(component.clientPermission(client)).toBe('secureMcp.sessionPermissionActive')
+    expect(component.clientPermissionChoice(client)).toBe('session')
+  })
+
   it('finishes native async credential saves inside Angular change detection', async () => {
     const runtime = { credentials: { create: vi.fn(async () => ({})) }, isMainWindow: true }
     let component: SecureMcpSettingsComponent
@@ -85,8 +107,11 @@ describe('named MCP credentials in settings', () => {
     const runtime = { credentials: { create }, isMainWindow: false }
     const component = new SecureMcpSettingsComponent({ save } as never, {} as never, {} as never, runtime as never)
     component.clientName = 'Blocked'
+    component.loading = false
     await component.onCreateClient()
     await component.onToggle({ id: 'id', selected: false } as never, true)
+    await component.onClosePolicyChange('after-completion')
+    expect(component.commandSessionClosePolicy).toBe('keep')
     expect(create).not.toHaveBeenCalled()
     expect(save).not.toHaveBeenCalled()
   })

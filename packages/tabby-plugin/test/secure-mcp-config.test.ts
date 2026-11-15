@@ -4,6 +4,8 @@ import {
   dedupeAuthorizedSshProfileIds,
   effectivePermanentAuthorization,
   persistPermanentAuthorizations,
+  persistCommandSessionClosePolicy,
+  readCommandSessionClosePolicy,
   readAuthorizedSshProfileIds,
   readPermanentAuthorizations,
   persistAuthorizedSshProfileIds,
@@ -20,8 +22,34 @@ describe('secure MCP config helpers', () => {
         http: { enabled: false, port: 50333 },
         authorizedSshProfileIds: [],
         permanentAuthorizations: [],
+        commandSessionClosePolicy: 'keep',
       },
     })
+  })
+
+  it.each([undefined, null, {}, { secureMcp: null }, {
+    secureMcp: { commandSessionClosePolicy: 'invalid' },
+  }])('defaults malformed or missing close settings to keep', store => {
+    expect(readCommandSessionClosePolicy(store)).toBe('keep')
+  })
+
+  it('persists the close policy through ConfigProxy and reads it after restart', async () => {
+    const harness = createTabbyConfigProxyHarness()
+    const config = { store: harness.store, save: vi.fn(async () => undefined) }
+    expect(await persistCommandSessionClosePolicy(config, 'after-completion')).toBe('after-completion')
+    const restarted = createTabbyConfigProxyHarness(harness.snapshotPersisted())
+    expect(readCommandSessionClosePolicy(restarted.store)).toBe('after-completion')
+    await persistCommandSessionClosePolicy(config, 'keep')
+    expect(readCommandSessionClosePolicy(harness.store)).toBe('keep')
+    expect((harness.snapshotPersisted().secureMcp as Record<string, unknown>)
+      .commandSessionClosePolicy).toBeUndefined()
+  })
+
+  it('restores the previous close policy when saving fails', async () => {
+    const harness = createTabbyConfigProxyHarness()
+    const config = { store: harness.store, save: vi.fn(async () => { throw new Error('disk full') }) }
+    await expect(persistCommandSessionClosePolicy(config, 'after-completion')).rejects.toThrow()
+    expect(readCommandSessionClosePolicy(harness.store)).toBe('keep')
   })
 
   it('reads an empty whitelist from missing or malformed config', () => {

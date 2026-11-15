@@ -37,6 +37,7 @@ import {
 } from './profile-security-snapshot'
 import { AuthorizedProfilesService } from '../services/authorized-profiles.service'
 import type { AuditEventInput } from '../audit/audit-types'
+import type { CommandSessionClosePolicy } from '../config/secure-mcp-config'
 
 export interface ApprovalEffects {
   audit: { append(input: AuditEventInput): Promise<void> }
@@ -137,7 +138,8 @@ export class ApprovalGatekeeper {
     private readonly leaseEpochSource: LeaseEpochSource,
     private readonly scheduler: ApprovalScheduler = new SystemApprovalScheduler(),
     private readonly memory?: AuthorizationMemory,
-      private readonly effects?: ApprovalEffects,
+    private readonly effects?: ApprovalEffects,
+    private readonly commandSessionClosePolicy: () => CommandSessionClosePolicy = () => 'keep',
   ) {
     crypto.getRandomValues(this.runKey)
   }
@@ -384,6 +386,7 @@ export class ApprovalGatekeeper {
 
   async runAuthorizedSshCommand(request: SshCommandRequest): Promise<SshCommandResult> {
     const revision = this.memory?.revision?.()
+    const closePolicy = this.commandSessionClosePolicy()
     if (request.signal?.aborted) {
       return { ok: false, code: 'cancelled' }
     }
@@ -503,16 +506,25 @@ export class ApprovalGatekeeper {
             validateBeforeSend: () => this.checkCurrent(request, approvedSnapshot, true, revision, request.command, rememberedOpen).ok,
       })
       if (!ran.ok) {
+        if (!ran.started || ran.reason === 'not_approved' || ran.reason === 'audit_unavailable' || ran.reason === 'target_unavailable') {
           await this.closeOwnedTab(opened)
+        }
         return {
           ok: false,
             code: ran.started ? 'outcome_unknown' : ran.reason === 'not_ready' ? 'target_unavailable' : ran.reason,
         }
       }
-        if (!rememberedOpen && this.connectionCurrent(request.connection) && (revision === undefined || revision === this.memory?.revision?.())) {
-          await this.rememberApprovedOpen(profile, request.connection)
+      if (!rememberedOpen && this.connectionCurrent(request.connection) && (revision === undefined || revision === this.memory?.revision?.())) {
+        await this.rememberApprovedOpen(profile, request.connection)
+      }
+      if (closePolicy === 'after-completion' && ran.completionConfirmed && !request.signal?.aborted) {
+        try {
+          await opened.destroy?.()
+        } catch {
+          console.warn('[Secure MCP] Could not close the completed command session.')
         }
-        return {
+      }
+      return {
         ok: true,
         commandClass: decision.commandClass,
         output: ran.output,

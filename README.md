@@ -29,6 +29,27 @@ Client configuration contains a private bearer token: do not commit or share it.
 | get_ssh_operation_authorization | Read the current profile grant and tier policy |
 | run_authorized_ssh_command | Run one authorized command in a dedicated new tab; output at most 4096 UTF-8 bytes |
 
+### Command session closing
+
+In **Settings → Secure MCP → Command sessions**, choose **Keep session open (default)** or
+**Close when the command finishes**. The setting applies globally to new sessions created by
+`run_authorized_ssh_command`; a change takes effect for subsequent requests.
+
+Automatic closing happens only after the command's completion marker is received and its output
+has been captured. After dispatch, timeouts, cancellations, and output limits leave the session
+open when completion cannot be confirmed. Failed authorization or audit checks still clean up the
+request's tab. A command that finishes with a nonzero exit status can
+still close its session. Existing sessions and sessions opened manually or through
+`open_authorized_ssh_profile` stay open.
+
+### Interface language
+
+Secure MCP follows Tabby's language setting. Simplified Chinese (`zh-CN`) and English are supported;
+other languages, including Traditional Chinese, fall back to English. Open settings pages and
+approval dialogs update when the Tabby language changes, including existing errors and countdowns.
+There is no separate plugin language setting. Profile names, client identities, tool identifiers,
+and the original operation JSON remain unchanged.
+
 ## Architecture and delivery
 
 AI client HTTP request → plugin-local MCP session → approval/authorization gate → Tabby SSH APIs. The service binds IPv4 loopback only. Only the main Tabby window hosts it; secondary windows do not take over and show read-only settings. Closing the main window stops the service and cancels pending work. A busy port is reported instead of being reclaimed.

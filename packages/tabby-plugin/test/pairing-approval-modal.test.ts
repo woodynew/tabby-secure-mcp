@@ -14,6 +14,22 @@ describe('PairingApprovalModalComponent', () => {
     modal.onWindowBlur()
     expect(active.dismiss).toHaveBeenCalledWith('deny')
   })
+  it.each(['session', '24h', 'permanent'] as const)('preserves the %s approval duration', duration => {
+    const active = { close: vi.fn(), dismiss: vi.fn() }
+    const modal = new PairingApprovalModalComponent(active as never)
+    modal.allowDuration = true
+    modal.duration = duration
+    modal.allow()
+    expect(active.close).toHaveBeenCalledWith(duration)
+  })
+
+  it('retains the legacy allow result when duration selection is disabled', () => {
+    const active = { close: vi.fn(), dismiss: vi.fn() }
+    const modal = new PairingApprovalModalComponent(active as never)
+    modal.allow()
+    expect(active.close).toHaveBeenCalledWith('allow')
+  })
+
   it('denies on window blur via HostListener handler', () => {
     expect(typeof PairingApprovalModalComponent.prototype.onWindowBlur).toBe('function')
   })

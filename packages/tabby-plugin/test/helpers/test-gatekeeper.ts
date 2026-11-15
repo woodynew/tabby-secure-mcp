@@ -8,7 +8,7 @@ export class ApprovalGatekeeper extends ProductionGatekeeper {
     super(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7] ?? {
       audit: { append: async () => undefined },
       closeTab: async () => undefined,
-    })
+    }, args[8])
     // Existing single-client fixtures use their memory as that client's connection store.
     this.testConnection = {
       client: { id: 'fixture-client', name: 'Fixture client', generation: 1 }, revision: 0, isCurrent: () => true,

@@ -83,6 +83,12 @@ Ask the AI tool to call these in order:
 
 Commands use a new visible tab and never read an existing terminal. Output is capped at 4096 UTF-8 bytes and execution collection at 45 seconds. See the README for allowed low/medium argument combinations; shell expansion/globbing is not performed.
 
+## Command sessions and interface language
+
+Command sessions stay open by default. In **Settings → Secure MCP → Command sessions**, choose to close a dedicated command tab after its completion marker has been received and output captured. This applies to subsequent requests only; existing tabs and tabs created by `open_authorized_ssh_profile` remain open.
+
+Secure MCP follows Tabby’s language setting: Simplified Chinese for `zh-CN`, English otherwise. Open settings and approval dialogs update when the language changes. MCP tool names, protocol fields, client/profile names, and command output remain unchanged.
+
 ## Errors and recovery
 
 - `not_approved`: approve the client or applicable open request, or review the SSH tier. Denial, Escape, blur and timeout do not grant permission.

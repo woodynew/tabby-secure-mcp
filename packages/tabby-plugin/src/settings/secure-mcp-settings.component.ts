@@ -9,6 +9,9 @@ import {
   persistAuthorizedSshProfileIds,
   readAuthorizedSshProfileIds,
   hasUnpersistedRevocations,
+  persistCommandSessionClosePolicy,
+  readCommandSessionClosePolicy,
+  type CommandSessionClosePolicy,
 } from '../config/secure-mcp-config'
 import {
   buildSecureMcpSettingsRows,
@@ -28,8 +31,22 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
   readonly tierOptions = SETTINGS_OPERATION_TIER_OPTIONS
   loading = true
   saving = false
+  commandSessionClosePolicy: CommandSessionClosePolicy = 'keep'
   error: string | null = null
   private loadedProfiles: PartialProfile<Profile>[] = []
+  readonly serviceStatuses: Record<string, string> = {
+    stopped: 'secureMcp.serviceStopped',
+    starting: 'secureMcp.serviceStarting',
+    running: 'secureMcp.serviceRunning',
+    secondary: 'secureMcp.serviceSecondary',
+    error: 'secureMcp.serviceError',
+  }
+  readonly serviceErrors: Record<string, string> = {
+    'Could not load MCP credentials or start the local service. Check the private credential file and port availability.': 'secureMcp.runtimeLoadError',
+    'Service stopped for this run, but the configuration was not saved. Retry before restarting Tabby.': 'secureMcp.runtimeStopError',
+    'Could not start local MCP. Check the configured port and audit/credential storage.': 'secureMcp.runtimeStartError',
+    'Invalid MCP service configuration.': 'secureMcp.runtimeConfigError',
+  }
   clientName = ''
   httpPort = 50333
   notice: string | null = null
@@ -61,11 +78,11 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
   get clients(): ClientCredentialView[] { return this.runtime?.credentials.list() ?? [] }
   trackClient(_index: number, client: ClientCredentialView): string { return client.id }
   clientPermission(client: ClientCredentialView): string {
-    if (client.permission.kind === 'session') return 'Next connection only — not remembered after reconnect or restart'
-    if (client.permission.kind === 'permanent') return 'Permanent — until revoked'
-    if (client.permission.kind === 'until') return `Until ${new Date(client.permission.expiresAt).toLocaleString()}`
-    if (this.runtime?.sessions().some(session => session.clientId === client.id && session.state === 'approved' && session.duration === 'session')) return 'This session only — reconnect requires approval'
-    return 'Not remembered (approval required for a new session)'
+    if (client.permission.kind === 'session') return 'secureMcp.sessionPermissionPending'
+    if (client.permission.kind === 'permanent') return 'secureMcp.permanentPermission'
+    if (client.permission.kind === 'until') return 'secureMcp.untilPermission'
+    if (this.runtime?.sessions().some(session => session.clientId === client.id && session.state === 'approved' && session.duration === 'session')) return 'secureMcp.sessionPermissionActive'
+    return 'secureMcp.noRememberedPermission'
   }
 
   clientPermissionChoice(client: ClientCredentialView): string {
@@ -101,9 +118,9 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
       }
       await credentials.setConnectionPermission(client, row.id, digest, revision)
       this.notice = choice === 'allowed'
-        ? 'SSH connection permanently allowed for this client and profile. Command operation tiers are unchanged.'
-        : 'Connection authorization cleared for this client and profile. Its next connection requires approval.'
-    }, 'Connection authorization was not saved. Check the refreshed profile and private storage, then retry. Failed revocations remain denied for this run.')
+        ? 'secureMcp.connectionAllowedNotice'
+        : 'secureMcp.connectionClearedNotice'
+    }, 'secureMcp.errorSaveConnection')
   }
 
   private async clientAction(action: () => Promise<unknown>, failure: string): Promise<void> {
@@ -115,28 +132,28 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
   }
 
   async onSaveServer(enabled: boolean): Promise<void> {
-    await this.clientAction(() => this.runtime!.setServerConfig(enabled, this.httpPort), 'MCP service settings could not be saved or started. Review the service error before restarting.')
+    await this.clientAction(() => this.runtime!.setServerConfig(enabled, this.httpPort), 'secureMcp.errorSaveService')
   }
 
   async onCreateClient(): Promise<void> {
     await this.clientAction(async () => {
       await this.runtime!.credentials.create(this.clientName)
       this.clientName = ''
-    }, 'Could not create the credential. Use a name of 1–80 characters without controls and check private storage.')
+    }, 'secureMcp.errorCreateCredential')
   }
 
   async onRenameClient(id: string, name: string, input?: HTMLInputElement): Promise<void> {
-    await this.clientAction(() => this.runtime!.credentials.rename(id, name), 'Could not save the credential name. Use 1–80 characters without controls.')
+    await this.clientAction(() => this.runtime!.credentials.rename(id, name), 'secureMcp.errorRenameCredential')
     const saved = this.runtime?.credentials.list().find(client => client.id === id)
     if (input && saved) input.value = saved.name
   }
 
   async onResetClient(id: string): Promise<void> {
-    await this.clientAction(() => this.runtime!.credentials.reset(id), 'Credential reset did not persist. The client is denied for this run; retry before restarting.')
+    await this.clientAction(() => this.runtime!.credentials.reset(id), 'secureMcp.errorResetCredential')
   }
 
   async onRevokeClient(id: string): Promise<void> {
-    await this.clientAction(() => this.runtime!.credentials.revoke(id), 'Revocation did not persist. The client is denied for this run; retry before restarting.')
+    await this.clientAction(() => this.runtime!.credentials.revoke(id), 'secureMcp.errorRevokeClient')
   }
 
   async onChangeClientPermission(id: string, generation: number, duration: string): Promise<void> {
@@ -144,11 +161,11 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
     await this.clientAction(async () => {
       await this.runtime!.credentials.setPermission(id, generation, duration)
       this.notice = duration === 'session'
-        ? 'Token unchanged. This client was disconnected; its next connection is approved for that session only (up to 24 hours). Reconnect or restart requires approval again.'
+        ? 'secureMcp.sessionPermissionNotice'
         : duration === 'none'
-          ? 'Authorization cleared. Token unchanged. This client was disconnected and must be approved on its next connection.'
-          : 'Authorization updated. Token unchanged. This client was disconnected; reconnect to use the new permission lifetime.'
-    }, 'Authorization update did not persist. The client is denied for this run; retry before restarting.')
+          ? 'secureMcp.clearPermissionNotice'
+          : 'secureMcp.updatedPermissionNotice'
+    }, 'secureMcp.errorUpdatePermission')
   }
 
   async onCopyClient(id: string): Promise<void> {
@@ -158,14 +175,15 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
         headers: { Authorization: `Bearer ${this.runtime!.credentials.tokenFor(id)}` },
       } } }
       await navigator.clipboard.writeText(JSON.stringify(value, null, 2))
-      this.notice = 'MCP configuration copied. It contains this client’s private access credential. Configure your AI tool’s Streamable HTTP connection with this URL and Authorization header.'
-    }, 'Could not copy the configuration to the clipboard.')
+      this.notice = 'secureMcp.copiedConfigurationNotice'
+    }, 'secureMcp.errorCopyConfiguration')
   }
 
   async reload(preserveError = false): Promise<void> {
     const revision = ++this.reloadRevision
     this.loading = true
     if (!preserveError) this.error = null
+    this.commandSessionClosePolicy = readCommandSessionClosePolicy(this.config.store)
     try {
       const loadedProfiles = (await this.profiles.getProfiles({ includeBuiltin: false, clone: true }))
         .map(profile => resolveEffectiveProfile(profile, this.profiles))
@@ -177,14 +195,36 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
         authorizedIds,
         this.authorizations.list(),
       )
-      if (!this.error && hasUnpersistedRevocations(this.config)) this.error = 'Some revocations are only applied for this run. Retry saving before restarting Tabby.'
+      if (!this.error && hasUnpersistedRevocations(this.config)) this.error = 'secureMcp.revocationsPending'
     } catch {
       if (revision !== this.reloadRevision) return
-      this.error = 'Failed to load SSH profiles.'
+      this.error = 'secureMcp.errorLoadProfiles'
       this.rows = []
       this.loadedProfiles = []
     } finally {
       if (revision === this.reloadRevision) this.updateView(() => { this.loading = false })
+    }
+  }
+
+  async onClosePolicyChange(rawPolicy: string, select?: Pick<HTMLSelectElement, 'value'>): Promise<void> {
+    if (!this.canManage || this.loading || this.saving || (rawPolicy !== 'keep' && rawPolicy !== 'after-completion')) {
+      return
+    }
+    const previous = this.commandSessionClosePolicy
+    this.saving = true
+    this.error = null
+    this.commandSessionClosePolicy = rawPolicy
+    try {
+      await persistCommandSessionClosePolicy(this.config, rawPolicy)
+    } catch {
+      this.commandSessionClosePolicy = previous
+      this.error = 'secureMcp.errorSaveClosePolicy'
+    } finally {
+      this.updateView(() => { this.saving = false })
+      // Native selection changes can precede Angular's binding update on a rejected save.
+      if (select) {
+        select.value = this.commandSessionClosePolicy
+      }
     }
   }
 
@@ -211,8 +251,7 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
       )
     } catch {
       row.selected = previousSelected
-      this.error =
-        'Failed to save authorized profile selection to Tabby config. Changes were not persisted.'
+      this.error = 'secureMcp.errorSaveProfiles'
       await this.reload(true)
     } finally {
       this.updateView(() => { this.saving = false })
@@ -225,7 +264,7 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
       return
     }
     if (row.grantStale) {
-      this.error = 'This profile changed. Explicitly save the grant again before changing its tier.'
+      this.error = 'secureMcp.errorStaleTier'
       return
     }
     await this.saveManagedGrant(row, { openSession: row.openSession, operationTier: rawTier })
@@ -240,7 +279,7 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
       await this.authorizations.revokeOpen(row.id)
       await this.reload()
     } catch {
-      this.error = 'Open revoked for this run, but the change was not persisted. Retry saving before restarting Tabby.'
+      this.error = 'secureMcp.errorRevokeOpen'
       await this.reload(true)
     }
   }
@@ -259,7 +298,7 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
   ): Promise<void> {
     const profile = this.loadedProfiles.find(candidate => candidate.id === row.id)
     if (!profile) {
-      this.error = 'Failed to save the operation grant.'
+      this.error = 'secureMcp.errorProfileMissing'
       await this.reload(true)
       return
     }
@@ -270,7 +309,7 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
       if (!raw) throw new Error('profile unavailable')
       const fresh = resolveEffectiveProfile(raw, this.profiles)
       if (stableProfileDigest(fresh) !== stableProfileDigest(profile)) {
-        this.error = 'This profile changed. Review the refreshed profile before saving the grant again.'
+        this.error = 'secureMcp.errorProfileChanged'
         await this.reload(true)
         return
       }
@@ -281,7 +320,7 @@ export class SecureMcpSettingsComponent implements OnInit, OnDestroy {
       }
       await this.reload(true)
     } catch {
-      this.error = 'Failed to save the operation grant to Tabby config. Changes were not persisted.'
+      this.error = 'secureMcp.errorSaveGrant'
       await this.reload(true)
     } finally {
       this.updateView(() => { this.saving = false })

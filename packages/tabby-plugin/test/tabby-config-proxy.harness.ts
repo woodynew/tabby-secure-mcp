@@ -3,6 +3,8 @@ import deepEqual from 'deep-equal'
 import {
   secureMcpConfigDefaults,
   type StoredPermanentAuthorization,
+  type SecureMcpConfigStore,
+  type CommandSessionClosePolicy,
 } from '../src/config/secure-mcp-config'
 
 /**
@@ -12,17 +14,7 @@ export function createTabbyConfigProxyHarness(initialStore: Record<string, unkno
   const defaults = secureMcpConfigDefaults
   const _store = { ...initialStore }
 
-  const store: {
-    secureMcp: {
-      authorizedSshProfileIds: string[]
-      permanentAuthorizations: StoredPermanentAuthorization[]
-    }
-  } = {} as {
-    secureMcp: {
-      authorizedSshProfileIds: string[]
-      permanentAuthorizations: StoredPermanentAuthorization[]
-    }
-  }
+  const store = {} as SecureMcpConfigStore
 
   Object.defineProperty(store, 'secureMcp', {
     enumerable: true,
@@ -33,6 +25,16 @@ export function createTabbyConfigProxyHarness(initialStore: Record<string, unkno
         _store.secureMcp = real
       }
       return {
+        get commandSessionClosePolicy(): CommandSessionClosePolicy {
+          return (real.commandSessionClosePolicy ?? defaults.secureMcp.commandSessionClosePolicy) as CommandSessionClosePolicy
+        },
+        set commandSessionClosePolicy(value: CommandSessionClosePolicy) {
+          if (value === defaults.secureMcp.commandSessionClosePolicy) {
+            delete real.commandSessionClosePolicy
+          } else {
+            real.commandSessionClosePolicy = value
+          }
+        },
         get authorizedSshProfileIds(): string[] {
           if (real.authorizedSshProfileIds !== undefined) {
             return real.authorizedSshProfileIds as string[]
