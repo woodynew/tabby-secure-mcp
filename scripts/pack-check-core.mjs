@@ -190,7 +190,7 @@ export async function inspectPackedTarball(options = {}) {
     const pluginPath = path.join(packDir, `tabby-secure-mcp-${EXPECTED_VERSION}.tgz`)
 
     const pluginEntries = await listTarballEntries(pluginPath)
-    assertAllowedEntries(pluginEntries, 'plugin', ['dist/index.js', 'package.json'])
+    assertAllowedEntries(pluginEntries, 'plugin', ['README.md', 'dist/index.js', 'package.json'])
 
     const pluginManifest = await listPackageJsonFromTarball(pluginPath)
     assertPackManifest(pluginManifest, 'plugin')

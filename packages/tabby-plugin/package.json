@@ -4,6 +4,19 @@
   "description": "Tabby plugin for secure MCP SSH profile access with in-app approval",
   "author": "tabby-secure-mcp contributors",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/woodynew/tabby-secure-mcp.git",
+    "directory": "packages/tabby-plugin"
+  },
+  "homepage": "https://github.com/woodynew/tabby-secure-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/woodynew/tabby-secure-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
   "main": "dist/index.js",
   "engines": {
     "node": ">=20.19.0"

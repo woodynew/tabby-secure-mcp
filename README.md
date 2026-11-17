@@ -1,6 +1,20 @@
 # tabby-secure-mcp
 
+[![CodeQL](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/codeql.yml)
+
 A Tabby plugin hosting a local Streamable HTTP MCP service. AI clients can list explicitly whitelisted SSH profiles, open and reuse visible SSH tabs, execute approved commands, and transfer files when separately enabled. The service runs inside Tabby; there is no standalone companion process or client-side Node command.
+
+## Security evidence
+
+- [Security policy and private vulnerability reporting](SECURITY.md)
+- [CodeQL scan runs](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/codeql.yml), [dependency review runs](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/dependency-review.yml), and [three-platform CI](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/ci.yml)
+- [Known dependency findings and scan baseline](docs/security-baseline.md)
+- [Release preparation and package provenance](docs/publishing.md)
+
+The badge reports whether analysis ran successfully, not whether there are no
+vulnerabilities. Existing dependency findings remain disclosed. No independent
+third-party security audit or security certification is claimed. Package provenance
+must be checked on an actually published version; preparing a workflow does not create it.
 
 ## Quick start
 

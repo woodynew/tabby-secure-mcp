@@ -12,6 +12,7 @@ import {
   assertPackManifest,
   assertTabbyPluginDiscoveryManifest,
   inspectPackedTarball,
+  listPackageJsonFromTarball,
   listTarballEntries,
   resolveTabbyPluginAuthor,
 } from './pack-check-core.mjs'
@@ -84,6 +85,7 @@ describe('single self-contained plugin tarball', () => {
     await writeMinimalTgz(path.join(packDir, 'tabby-secure-mcp-0.1.0.tgz'), {
       'package/package.json': JSON.stringify({ name: 'tabby-secure-mcp', version: EXPECTED_VERSION, author: 'test', keywords: [TABBY_PLUGIN_KEYWORD], main: 'dist/index.js' }),
       'package/dist/index.js': bundle,
+      'package/README.md': 'See https://github.com/woodynew/tabby-secure-mcp/security/policy',
     })
     try {
       return await inspectPackedTarball({ packDir, runPack: false })
@@ -120,15 +122,28 @@ describe('inspectPackedTarball integration', () => {
     const pluginBundle = path.join(repoRoot, 'packages/tabby-plugin/dist/index.js')
     await expect(readFile(pluginBundle)).resolves.toBeDefined()
 
-    const result = await inspectPackedTarball({
-      repoRoot,
-      runPack: true,
-    })
-
-    expect(result.plugin.version).toBe(EXPECTED_VERSION)
-    expect(result.plugin.entries.sort()).toEqual(['dist/index.js', 'package.json'])
-    expect(result.plugin.bundle).toMatch(/webpackUniversalModuleDefinition|module\.exports/)
-    expect(Object.keys(result)).toEqual(['plugin'])
+    const packDir = await mkdtemp(path.join(tmpdir(), 'publication-pack-'))
+    try {
+      const result = await inspectPackedTarball({ packDir, runPack: true })
+      const manifest = await listPackageJsonFromTarball(path.join(packDir, `tabby-secure-mcp-${EXPECTED_VERSION}.tgz`))
+      expect(manifest.repository).toEqual({
+        type: 'git',
+        url: 'git+https://github.com/woodynew/tabby-secure-mcp.git',
+        directory: 'packages/tabby-plugin',
+      })
+      expect(manifest.bugs.url).toBe('https://github.com/woodynew/tabby-secure-mcp/issues')
+      expect(manifest.homepage).toBe('https://github.com/woodynew/tabby-secure-mcp#readme')
+      expect(manifest.publishConfig).toEqual({ access: 'public', registry: 'https://registry.npmjs.org' })
+      expect(result.plugin.version).toBe(EXPECTED_VERSION)
+      expect(result.plugin.entries.sort()).toEqual(['README.md', 'dist/index.js', 'package.json'])
+      expect(result.plugin.bundle).toMatch(/webpackUniversalModuleDefinition|module\.exports/)
+      expect(Object.keys(result)).toEqual(['plugin'])
+      const readme = await readFile(path.join(repoRoot, 'packages/tabby-plugin/README.md'), 'utf8')
+      expect(readme).toContain('https://github.com/woodynew/tabby-secure-mcp/security/policy')
+      expect(readme).toContain('https://github.com/woodynew/tabby-secure-mcp#quick-start')
+    } finally {
+      await rm(packDir, { recursive: true, force: true })
+    }
   })
 })
 
