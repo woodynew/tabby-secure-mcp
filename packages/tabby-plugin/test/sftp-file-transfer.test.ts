@@ -110,8 +110,8 @@ describe('standalone SFTP file transfers', () => {
     for (let i = 0; i < data.length; i++) data[i] = i % 256
     await fs.writeFile(f.options.localPath, data)
     expect(await transferSshFile({ ...f.options, direction: 'upload' })).toEqual({ bytesTransferred: data.length })
-    expect(f.files.get(f.options.remotePath)).toEqual(data)
-    expect(await fs.readFile(f.options.localPath)).toEqual(data)
+    expect(f.files.get(f.options.remotePath)?.equals(data)).toBe(true)
+    expect((await fs.readFile(f.options.localPath)).equals(data)).toBe(true)
     expect(f.handles).toEqual([{ closed: true, writes: 3, mode: 42 }])
   })
 

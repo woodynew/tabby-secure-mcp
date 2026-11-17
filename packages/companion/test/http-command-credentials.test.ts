@@ -298,7 +298,8 @@ describe('command credentials', () => {
     expect(restarted.commandSet(a, 'ssh', digest)).toMatchObject({ rules: [], defaultRules: [], inheritDefaults: false })
   })
 
-  it.each(['global', 'local'] as const)('never activates failed %s additions after replacement or on later saves', async target => {
+  // Directory fsync is skipped on Windows, so this POSIX durability failure has no Windows equivalent.
+  it.skipIf(process.platform === 'win32').each(['global', 'local'] as const)('never activates failed %s additions after replacement or on later saves', async target => {
     let armed = false, replaced = false
     const { store, file } = await setup({
       rename: async (from, to) => { await fs.rename(from, to); if (armed) replaced = true },
