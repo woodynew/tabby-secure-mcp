@@ -304,7 +304,7 @@ describe('command credentials', () => {
       rename: async (from, to) => { await fs.rename(from, to); if (armed) replaced = true },
       open: async (...args: Parameters<typeof fs.open>) => {
         const handle = await fs.open(...args)
-        if (armed && replaced && String(args[0]).endsWith('/private')) handle.sync = async () => { throw new Error('sync failed') }
+        if (armed && replaced && path.basename(String(args[0])) === 'private') handle.sync = async () => { throw new Error('sync failed') }
         return handle
       },
     })
