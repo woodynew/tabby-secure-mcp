@@ -27,6 +27,10 @@ export type AuditEventType =
   | 'command_authorized'
   | 'open_result'
   | 'command_result'
+  | 'tab_close_requested'
+  | 'tab_close_result'
+  | 'file_transfer_requested'
+  | 'file_transfer_result'
   | 'cancel'
 
 export type AuditResult = 'ok' | 'error'
@@ -37,6 +41,9 @@ export interface AuditEventInput {
   errorCode?: ErrorCode | 'descriptor_invalid' | 'internal'
   requestId?: string
   authorizedCount?: number
+  approvalMode?: 'ask' | 'auto_edit' | 'full'
+  commandRisk?: 'low' | 'high' | 'unknown'
+  commandRuleId?: string
 }
 
 export interface StoredAuditEvent {
@@ -48,6 +55,9 @@ export interface StoredAuditEvent {
   error_code?: string
   request_id?: string
   authorized_count?: number
+  approval_mode?: 'ask' | 'auto_edit' | 'full'
+  command_risk?: 'low' | 'high' | 'unknown'
+  command_rule_id?: string
   previous_hash: string
   hash: string
 }
@@ -77,6 +87,9 @@ export function canonicalAuditPayload(
   if (input.authorizedCount !== undefined) {
     payload.authorized_count = input.authorizedCount
   }
+  if (input.approvalMode !== undefined) payload.approval_mode = input.approvalMode
+  if (input.commandRisk !== undefined) payload.command_risk = input.commandRisk
+  if (input.commandRuleId !== undefined) payload.command_rule_id = input.commandRuleId
   return payload
 }
 

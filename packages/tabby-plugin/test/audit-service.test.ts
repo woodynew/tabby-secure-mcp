@@ -33,6 +33,15 @@ function createMemoryFs(): { fs: AuditFileSystem; lines: string[] } {
 }
 
 describe('AuditService', () => {
+  it('persists mode and risk as hash-verified command metadata without command text', async () => {
+    const { fs, lines } = createMemoryFs()
+    const audit = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
+    await audit.append({ event: 'command_authorized', result: 'ok', approvalMode: 'auto_edit', commandRisk: 'low', commandRuleId: 'a'.repeat(64) })
+    expect(JSON.parse(lines[0])).toMatchObject({ approval_mode: 'auto_edit', command_risk: 'low', command_rule_id: 'a'.repeat(64) })
+    const reloaded = AuditService.forTests({ logPath: '/tmp/audit.jsonl', fs, platform: 'linux' })
+    await expect(reloaded.append({ event: 'runtime_start', result: 'ok' })).resolves.toBeUndefined()
+    expect(lines).toHaveLength(2)
+  })
   it('documents hash chain limitations in code', () => {
     expect(AUDIT_CHAIN_LIMITATION).toMatch(/whole-file replacement/)
     expect(AUDIT_CHAIN_LIMITATION).toMatch(/tail deletion/)

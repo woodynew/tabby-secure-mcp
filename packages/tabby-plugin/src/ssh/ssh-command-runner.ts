@@ -139,7 +139,7 @@ export async function runSingleSshCommand(input: {
   }
 }
 
-async function waitUntilSessionOpen(input: {
+export async function waitUntilSessionOpen(input: {
   tab: SingleCommandTab
   signal?: AbortSignal
   deadlineMonotonicMs: number

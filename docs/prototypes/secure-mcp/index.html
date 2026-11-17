@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Secure MCP · Tabby 设置预览</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script src="model.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body data-theme="dark">
+  <div class="preview-bar">
+    <div><span class="preview-label">交互预览</span><span class="preview-note">模拟数据 · 刷新后重置</span></div>
+    <div class="preview-controls">
+      <label class="sr-only" for="scenario">预览场景</label>
+      <select id="scenario"><option value="normal">日常使用</option><option value="empty">空状态</option><option value="long">长名称 / 多客户端</option><option value="limit">128 条规则</option></select>
+      <div class="theme-switch" role="group" aria-label="预览主题">
+        <button data-theme-choice="dark" aria-pressed="true">深色</button>
+        <button data-theme-choice="light" aria-pressed="false">浅色</button>
+        <button data-theme-choice="custom" aria-pressed="false">自定义配色</button>
+      </div>
+    </div>
+  </div>
+  <div class="app-shell">
+    <header class="window-bar">
+      <div class="window-dots" aria-hidden="true"><b></b><b></b><b></b></div>
+      <div class="window-tab"><span aria-hidden="true">⌘</span> 设置 <span class="tab-close" aria-hidden="true">×</span></div>
+      <span class="window-brand">Tabby</span>
+    </header>
+    <div class="app-layout">
+      <aside class="host-sidebar" aria-label="Tabby 设置导航">
+        <div class="sidebar-heading">设置</div>
+        <div class="host-nav-item">配置与连接</div><div class="host-nav-item">外观与行为</div><div class="host-nav-item">配色方案</div><div class="host-nav-item">快捷键</div>
+        <div class="sidebar-category">连接</div><div class="host-nav-item">终端</div><div class="host-nav-item">SSH</div><div class="host-nav-item">串口</div>
+        <div class="sidebar-category">插件</div><div class="host-nav-item">插件管理</div><div class="host-nav-item selected"><span class="shield-small" aria-hidden="true"></span>Secure MCP</div>
+        <div class="sidebar-bottom"><span class="dot good"></span> 本地安全连接</div>
+      </aside>
+      <main class="workspace">
+        <header class="workspace-header">
+          <div><div class="eyebrow">TABBY PLUGIN</div><h1>Secure MCP</h1><p>让 AI 客户端按你的授权使用 SSH。</p></div>
+          <span id="header-status" class="status-pill"><span class="dot good"></span>服务运行中</span>
+        </header>
+        <nav class="section-tabs" aria-label="Secure MCP 分区">
+          <button data-page="service">服务</button><button data-page="clients" class="active" aria-current="page">客户端 <span id="client-count" class="count">3</span></button><button data-page="ssh">SSH 权限</button><button data-page="global">全局命令集 <span id="global-count" class="count">0</span></button>
+        </nav>
+        <div id="content" class="content-scroll"></div>
+        <footer id="editor-footer" class="editor-footer" hidden></footer>
+      </main>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="action-dialog" aria-labelledby="dialog-title"><form method="dialog" id="dialog-form"><h2 id="dialog-title"></h2><div id="dialog-body"></div><div id="dialog-actions" class="dialog-actions"></div></form></dialog>
+</body>
+</html>

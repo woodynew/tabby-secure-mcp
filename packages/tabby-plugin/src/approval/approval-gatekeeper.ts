@@ -1,4 +1,5 @@
 import { Injectable } from '@angular/core'
+import { createHash } from 'node:crypto'
 import { APPROVAL_WINDOW_MS } from '@tabby-secure-mcp/companion'
 import type { ClientConnectionPermissions, ClientIdentity } from '@tabby-secure-mcp/companion'
 import type { PartialProfile, Profile, ProfilesService } from 'tabby-core'
@@ -7,10 +8,10 @@ import type { AuthorizationMemory } from '../authorization/permanent-authorizati
 import {
   publicOperationTierPolicy,
   type GrantedOperationTier,
-  type OperationTierPolicy,
   type SshCommandClass,
 } from '../authorization/operation-tier-policy'
-import { authorizeSingleSshCommand } from '../authorization/ssh-command'
+import { analyzeSshCommand, commandRuleMatches, type CommandRisk } from '@tabby-secure-mcp/ipc-contract/command-policy'
+import { sanitizeApprovalDisplayText } from './display-sanitizer'
 import { isSingleCommandTab, runSingleSshCommand } from '../ssh/ssh-command-runner'
 import { presentWithApprovalDeadline } from './approval-deadline'
 import { buildOpenApprovalDigest } from './approval-digest'
@@ -18,6 +19,7 @@ import {
   type ApprovalPresenter,
   buildOpenApprovalViewModel,
   buildPairingApprovalViewModel,
+  buildCommandApprovalDetails,
 } from './approval-presenter'
 import type { ApprovalScheduler } from './approval-scheduler'
 import { SystemApprovalScheduler } from './approval-scheduler'
@@ -38,6 +40,7 @@ import {
 import { AuthorizedProfilesService } from '../services/authorized-profiles.service'
 import type { AuditEventInput } from '../audit/audit-types'
 import type { CommandSessionClosePolicy } from '../config/secure-mcp-config'
+import type { RetainedTabMetadata, TabAcquisition, TabLease, TabTarget } from '../runtime/mcp-owned-tabs'
 
 export interface ApprovalEffects {
   audit: { append(input: AuditEventInput): Promise<void> }
@@ -54,6 +57,9 @@ export type ApprovalErrorCode =
   | 'target_unavailable'
   | 'audit_unavailable'
   | 'outcome_unknown'
+  | 'command_disabled'
+  | 'unsupported_command'
+  | 'approval_unavailable'
 
 export type { OpenAuthorizedOperation }
 
@@ -75,6 +81,7 @@ export interface OpenApprovalRequest {
   signal?: AbortSignal
   authorizationRevision?: number
   connection?: ClientConnectionContext
+  onRetainedTab?(tab: unknown, metadata: RetainedTabMetadata): void
 }
 
 export interface PairingApprovalRequest {
@@ -91,10 +98,7 @@ export type PairingApprovalResult = { ok: true; approved: true } | { ok: false; 
 
 export type LeaseEpochSource = () => number | null
 
-export type PublicOperationTierPolicy = Pick<
-  OperationTierPolicy,
-  'tier' | 'rank' | 'label' | 'subject' | 'effect'
->
+export type PublicOperationTierPolicy = ReturnType<typeof publicOperationTierPolicy>[number]
 
 export type SshCommandErrorCode = ApprovalErrorCode | 'expired'
 
@@ -106,10 +110,13 @@ export interface SshCommandRequest {
   deadlineMonotonicMs: number
   signal?: AbortSignal
   connection?: ClientConnectionContext
+  onRetainedTab?(tab: unknown, metadata: RetainedTabMetadata): void
+  acquireTab?(target: TabTarget): TabAcquisition
+  onCreatedTab?(tab: unknown, metadata: RetainedTabMetadata): TabLease | undefined
 }
 
 export type SshCommandResult =
-  | { ok: true; commandClass: SshCommandClass; output: string; truncated: boolean }
+  | { ok: true; commandClass: SshCommandClass; commandRisk: CommandRisk; output: string; truncated: boolean }
   | { ok: false; code: SshCommandErrorCode }
 
 export type OperationAuthorizationDescription =
@@ -363,7 +370,7 @@ export class ApprovalGatekeeper {
     }
 
     if (!await this.auditCritical('open_authorized', request.requestId)) return { ok: false, code: 'audit_unavailable' }
-    const checked = this.checkCurrent(request, approvedSnapshot, options.enforceDeadline, request.authorizationRevision, undefined, !options.enforceDeadline)
+    const checked = this.checkCurrent(request, approvedSnapshot, options.enforceDeadline, request.authorizationRevision, !options.enforceDeadline)
     if (!checked.ok) return checked
 
     try {
@@ -371,10 +378,13 @@ export class ApprovalGatekeeper {
       if (opened === null) {
         return { ok: false, code: 'target_unavailable' }
       }
+      const session = isSingleCommandTab(opened) ? opened.session ?? undefined : undefined
+      const wasOpen = !!session?.open
       if (!this.connectionCurrent(request.connection) || request.signal?.aborted || this.leaseEpochSource() !== request.leaseEpoch || (request.authorizationRevision !== undefined && this.memory?.revision?.() !== request.authorizationRevision)) {
         await this.closeOwnedTab(opened)
         return { ok: false, code: 'outcome_unknown' }
       }
+      request.onRetainedTab?.(opened, { profileId: freshProfile.id!, profileDigest: stableProfileDigest(freshProfile), session, wasOpen, reusable: true, reused: false })
       if (options.rememberAfterOpen) {
         await this.rememberApprovedOpen(freshProfile, request.connection)
       }
@@ -386,158 +396,226 @@ export class ApprovalGatekeeper {
 
   async runAuthorizedSshCommand(request: SshCommandRequest): Promise<SshCommandResult> {
     const revision = this.memory?.revision?.()
+    const permissions = request.connection?.permissions
+    let commandRevision = permissions?.commandRevision?.()
     const closePolicy = this.commandSessionClosePolicy()
-    if (request.signal?.aborted) {
-      return { ok: false, code: 'cancelled' }
-    }
-    if (!isValidOpenRequestId(request.requestId) || !isValidLeaseEpoch(request.leaseEpoch)) {
+    if (request.signal?.aborted) return { ok: false, code: 'cancelled' }
+    if (!isValidOpenRequestId(request.requestId) || !isValidLeaseEpoch(request.leaseEpoch)
+      || this.leaseEpochSource() !== request.leaseEpoch || this.seenRequestIds.has(request.requestId)) {
       return { ok: false, code: 'not_approved' }
     }
-    const activeLeaseEpoch = this.leaseEpochSource()
-    if (activeLeaseEpoch === null || request.leaseEpoch !== activeLeaseEpoch) {
-      return { ok: false, code: 'not_approved' }
-    }
-    if (this.seenRequestIds.has(request.requestId)) {
-      return { ok: false, code: 'not_approved' }
-    }
-    const authorized = authorizeSingleSshCommand({
-      command: request.command,
-      grantedTier: 'full',
-      grantFresh: true,
-    })
-    if (!authorized.ok && authorized.reason === 'not_a_single_command') {
-      return { ok: false, code: 'not_approved' }
-    }
-    if (this.presentationInFlight) {
-      return { ok: false, code: 'busy' }
-    }
-
+    const analysis = analyzeSshCommand(request.command)
+    if (!analysis) return { ok: false, code: 'unsupported_command' }
+    const commandRuleId = createHash('sha256').update(JSON.stringify(analysis.rule)).digest('hex')
+    if (this.presentationInFlight) return { ok: false, code: 'busy' }
     this.presentationInFlight = true
     this.rememberRequestId(request.requestId)
+    let undoRemember: (() => Promise<void>) | undefined
+    let succeeded = false
+    let tabLease: TabLease | undefined
+    let reusedTab = false
+    let leaseReusable = true
     try {
-      let profile
+      let profile: PartialProfile<Profile>
       try {
         await this.authorizedProfiles.listAuthorizedProfiles()
         profile = await this.authorizedProfiles.resolveAuthorizedProfile(request.profileRef)
-      } catch {
-        return { ok: false, code: 'target_unavailable' }
-      }
-      if (typeof profile.id !== 'string') {
-        return { ok: false, code: 'target_unavailable' }
-      }
+      } catch { return { ok: false, code: 'target_unavailable' } }
+      if (typeof profile.id !== 'string') return { ok: false, code: 'target_unavailable' }
       let digest: string
-      let approvedSnapshot: ProfileSecuritySnapshot
+      let snapshot: ProfileSecuritySnapshot
       try {
         digest = stableProfileDigest(profile)
-        approvedSnapshot = buildProfileSecuritySnapshot(profile, this.runKey)
-      } catch {
-        return { ok: false, code: 'target_unavailable' }
-      }
-      const grant = this.memory
-        ? this.memory.effectiveGrant(profile.id, digest)
-        : { openSession: false, operationTier: 'none' as const }
-      const decision = authorizeSingleSshCommand({
-        command: request.command,
-        grantedTier: grant.operationTier,
-        grantFresh: true,
-      })
-      if (!decision.ok) {
-        return { ok: false, code: 'not_approved' }
-      }
-      if (request.signal?.aborted) {
-        return { ok: false, code: 'cancelled' }
-      }
-      if (this.clock.now() >= request.deadlineMonotonicMs) {
-        return { ok: false, code: 'expired' }
-      }
-
-        const rememberedOpen = this.profileHasRememberedOpen(profile, request.connection)
-        if (!rememberedOpen) {
-          const toolName = 'run_authorized_ssh_command'
-          const approval = await this.presentConnectionApproval(request, profile.name, toolName,
-            { method: toolName, params: { profile_ref: request.profileRef, command: request.command } }, request.connection?.client.name ?? 'Local client')
-          if (approval !== 'allow') return { ok: false, code: 'not_approved' }
+        snapshot = buildProfileSecuritySnapshot(profile, this.runKey)
+      } catch { return { ok: false, code: 'target_unavailable' } }
+      const mode = this.memory?.effectiveGrant(profile.id, digest).operationTier ?? 'none'
+      if (mode !== 'ask' && mode !== 'auto_edit' && mode !== 'full') return { ok: false, code: 'command_disabled' }
+      const connection = request.connection
+      let rememberedOpen = this.profileHasRememberedOpen(profile, connection)
+      const check = () => {
+        if (tabLease && !tabLease.isCurrent()) return { ok: false as const, code: 'target_unavailable' as const }
+        const current = this.checkCurrent(request, snapshot, true, revision, rememberedOpen)
+        if (!current.ok) return current
+        if (commandRevision !== permissions?.commandRevision?.()
+          || this.memory?.effectiveGrant(profile.id!, digest).operationTier !== mode) {
+          return { ok: false as const, code: 'not_approved' as const }
         }
-
-      if (!await this.auditCritical('command_requested', request.requestId)) return { ok: false, code: 'audit_unavailable' }
-        const beforeOpen = this.checkCurrent(request, approvedSnapshot, true, revision, request.command, rememberedOpen)
-      if (!beforeOpen.ok) return beforeOpen
-      let opened: unknown
-      try {
-        opened = await this.openDedicatedTab(beforeOpen.profile)
-      } catch {
-        return { ok: false, code: 'target_unavailable' }
+        return current
       }
-      if (!isSingleCommandTab(opened)) {
-        if (opened) await this.closeOwnedTab(opened)
-        return { ok: false, code: 'target_unavailable' }
+      const initial = check()
+      if (!initial.ok) return initial
+      const selected = request.acquireTab?.({ profileId: profile.id, profileDigest: digest })
+      if (selected && !selected.ok) return selected
+      tabLease = selected?.lease
+      reusedTab = !!tabLease
+      if (this.clock.now() >= request.deadlineMonotonicMs) return { ok: false, code: 'expired' }
+      let saved
+      try { saved = connection && permissions?.commandSet?.(connection.client, profile.id, digest) }
+      catch { return { ok: false, code: 'approval_unavailable' } }
+      const rules = saved && !saved.stale ? [...(saved.inheritDefaults ? saved.defaultRules : []), ...saved.rules] : []
+      const needsCommandApproval = mode === 'ask' ? !rules.some(rule => commandRuleMatches(rule, analysis))
+        : mode === 'auto_edit' && analysis.risk !== 'low'
+      if (!await this.auditCritical('command_requested', request.requestId, { approvalMode: mode, commandRisk: analysis.risk, commandRuleId })) {
+        return { ok: false, code: 'audit_unavailable' }
       }
-
-      let freshProfile
-      try {
-        freshProfile = await this.authorizedProfiles.resolveAuthorizedProfile(request.profileRef)
-        const freshSnapshot = buildProfileSecuritySnapshot(freshProfile, this.runKey)
-        if (!profileSecuritySnapshotsEqual(approvedSnapshot, freshSnapshot)) {
-            await this.closeOwnedTab(opened)
+      let remember = false
+      if (needsCommandApproval) {
+        const allowRemember = mode === 'ask' && !!connection && !!permissions?.setCommandSet
+        const deadline = Math.min(request.deadlineMonotonicMs, this.clock.now() + APPROVAL_WINDOW_MS)
+        const decision = await presentWithApprovalDeadline({
+          clock: this.clock, scheduler: this.scheduler, deadlineMonotonicMs: deadline, userSignal: request.signal,
+          present: context => this.presenter.presentCommand?.({
+            ...buildOpenApprovalViewModel({
+              clientIdentity: connection?.client.name ?? 'Local client', toolName: 'run_authorized_ssh_command',
+              targetDisplayName: profile.name!, operation: request.command, remainingSeconds: context.remainingSeconds(),
+            }),
+            operationDisplay: sanitizeApprovalDisplayText(request.command),
+            risk: analysis.risk, ...buildCommandApprovalDetails(analysis),
+            allowRemember, approveConnection: !rememberedOpen,
+          }, context) ?? Promise.resolve('deny' as const),
+        })
+        if (request.signal?.aborted) return { ok: false, code: 'cancelled' }
+        if (this.clock.now() >= deadline) return { ok: false, code: 'expired' }
+        if (decision === 'deny' || decision === 'remember' && !allowRemember) return { ok: false, code: 'not_approved' }
+        remember = decision === 'remember'
+      } else if (!rememberedOpen) {
+        const approval = await this.presentConnectionApproval(request, profile.name!, 'run_authorized_ssh_command',
+          { method: 'run_authorized_ssh_command', params: { profile_ref: request.profileRef, command: request.command } },
+          connection?.client.name ?? 'Local client')
+        if (approval !== 'allow') return { ok: false, code: request.signal?.aborted ? 'cancelled' : 'not_approved' }
+      }
+      const approved = check()
+      if (!approved.ok) return approved
+      if (!rememberedOpen && connection) {
+        try {
+          const saving = permissions!.setConnectionPermission(connection.client, profile.id, digest, connection.revision,
+            () => this.checkCurrent(request, snapshot, true, revision).ok)
+          // Capture only the version this call owns; a newer edit must invalidate this request.
+          try { connection.revision = permissions!.connectionRevision(connection.client) }
+          catch { await saving; return { ok: false, code: 'not_approved' } }
+          commandRevision = permissions!.commandRevision?.()
+          await saving
+          rememberedOpen = true
+        } catch {
+          if (request.signal?.aborted) return { ok: false, code: 'cancelled' }
+          const current = check()
+          return current.ok ? { ok: false, code: 'approval_unavailable' } : current
+        }
+        const current = check()
+        if (!current.ok) {
+          // Cover invalidation between the persistence commit and this await continuation.
+          try { await permissions!.setConnectionPermission(connection.client, profile.id, null, connection.revision) } catch {}
+          return current
+        }
+      }
+      const execute = async (): Promise<SshCommandResult> => {
+        const beforeOpen = check()
+        if (!beforeOpen.ok) return beforeOpen
+        let opened: unknown
+        try { opened = tabLease ? tabLease.tab : await this.openDedicatedTab(beforeOpen.profile) }
+        catch { return { ok: false, code: 'target_unavailable' } }
+        if (!isSingleCommandTab(opened)) {
+          if (tabLease) leaseReusable = false
+          else if (opened) await this.closeOwnedTab(opened)
           return { ok: false, code: 'target_unavailable' }
         }
+        const commandTab = opened
+        if (!reusedTab && request.onCreatedTab) {
+          tabLease = request.onCreatedTab(opened, { profileId: profile.id!, profileDigest: digest, session: opened.session ?? undefined, wasOpen: !!opened.session?.open, reusable: true, reused: false })
+          if (!tabLease || tabLease.tab !== opened || !tabLease.isCurrent()) {
+            if (!tabLease) await this.closeOwnedTab(opened)
+            return { ok: false, code: 'target_unavailable' }
+          }
+        }
+        const canCleanup = () => !reusedTab && (!tabLease || tabLease.isCurrent())
+        try {
+          const fresh = await this.authorizedProfiles.resolveAuthorizedProfile(request.profileRef)
+          if (!profileSecuritySnapshotsEqual(snapshot, buildProfileSecuritySnapshot(fresh, this.runKey))) {
+            if (tabLease) leaseReusable = false
+            if (canCleanup()) await this.closeOwnedTab(opened)
+            return { ok: false, code: 'target_unavailable' }
+          }
+        } catch {
+          if (tabLease) leaseReusable = false
+          if (canCleanup()) await this.closeOwnedTab(opened)
+          return { ok: false, code: 'target_unavailable' }
+        }
+        const nonce = new Uint8Array(16)
+        crypto.getRandomValues(nonce)
+        if (tabLease) leaseReusable = false
+        let executionSession: { open?: boolean } | undefined
+        const ran = await runSingleSshCommand({
+          tab: opened, command: analysis.command,
+          markerNonce: Array.from(nonce, byte => byte.toString(16).padStart(2, '0')).join(''),
+          signal: request.signal, deadlineMonotonicMs: Math.min(request.deadlineMonotonicMs, this.clock.now() + 45_000), clock: this.clock, scheduler: this.scheduler,
+          beforeSend: async () => {
+            if (!await this.auditCritical('command_authorized', request.requestId, { approvalMode: mode, commandRisk: analysis.risk, commandRuleId })) return 'audit_unavailable'
+            const current = check()
+            if (current.ok) executionSession = commandTab.session ?? undefined
+            return current.ok ? undefined : current.code === 'target_unavailable' ? 'target_unavailable' : 'not_approved'
+          },
+          validateBeforeSend: () => check().ok,
+        })
+        if (tabLease) leaseReusable = ran.ok ? ran.completionConfirmed : !ran.started
+        if (!ran.ok) {
+          if (canCleanup() && (!ran.started || ran.reason === 'not_approved' || ran.reason === 'audit_unavailable' || ran.reason === 'target_unavailable')) {
+            await this.closeOwnedTab(opened)
+          }
+          return { ok: false, code: ran.started ? 'outcome_unknown' : ran.reason === 'not_ready' ? 'target_unavailable' : ran.reason }
+        }
+        let retained = true
+        if (canCleanup() && closePolicy === 'after-completion' && ran.completionConfirmed && !request.signal?.aborted) {
+          try { if (opened.destroy) { await opened.destroy(); retained = false } } catch { console.warn('[Secure MCP] Could not close the completed command session.') }
+        }
+        if (retained) request.onRetainedTab?.(opened, { profileId: profile.id!, profileDigest: digest, session: executionSession, wasOpen: true, reusable: ran.completionConfirmed, reused: reusedTab })
+        return { ok: true, commandClass: analysis.commandClass, commandRisk: analysis.risk, output: ran.output, truncated: ran.truncated }
+      }
+      if (!remember || !connection || !permissions?.setCommandSet) {
+        const outcome = await execute()
+        succeeded = outcome.ok && !request.signal?.aborted
+        return outcome
+      }
+      let outcome: SshCommandResult | undefined
+      let attempted = false
+      try {
+        const previous = { inheritDefaults: saved?.inheritDefaults ?? true, rules: saved?.stale ? [] : saved?.rules ?? [] }
+        const before = commandRevision
+        const saving = permissions.setCommandSet(connection.client, profile.id, digest, {
+          inheritDefaults: previous.inheritDefaults, rules: [...previous.rules, analysis.rule],
+        }, commandRevision!, () => this.checkCurrent(request, snapshot, true, revision, rememberedOpen).ok,
+        async () => {
+          attempted = true
+          outcome = await execute()
+          if (!outcome.ok) throw new Error('Command request did not complete')
+        })
+        commandRevision = permissions.commandRevision?.()
+        const ownedRevision = commandRevision
+        if (ownedRevision !== undefined && ownedRevision !== before) {
+          undoRemember = async () => {
+            if (!connection.isCurrent() || permissions.commandRevision?.() !== ownedRevision) return
+            await permissions.setCommandSet!(connection.client, profile.id!, digest, previous, ownedRevision)
+          }
+        }
+        await saving
+        succeeded = true
+        return outcome!
       } catch {
-          await this.closeOwnedTab(opened)
-        return { ok: false, code: 'target_unavailable' }
+        // The operation may already have run if finalizing its remembered approval failed.
+        if (outcome) return outcome.ok ? { ok: false, code: 'outcome_unknown' } : outcome
+        if (attempted) return { ok: false, code: 'outcome_unknown' }
+        return { ok: false, code: request.signal?.aborted ? 'cancelled' : 'approval_unavailable' }
       }
 
-        const nonceBytes = new Uint8Array(16)
-      crypto.getRandomValues(nonceBytes)
-      const markerNonce = Array.from(nonceBytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-      const ran = await runSingleSshCommand({
-        tab: opened,
-        command: decision.command,
-        markerNonce,
-        signal: request.signal,
-        deadlineMonotonicMs: request.deadlineMonotonicMs,
-        clock: this.clock,
-        scheduler: this.scheduler,
-          beforeSend: async () => {
-            if (!await this.auditCritical('command_authorized', request.requestId)) return 'audit_unavailable'
-              const checked = this.checkCurrent(request, approvedSnapshot, true, revision, request.command, rememberedOpen)
-            if (checked.ok) return undefined
-            return checked.code === 'target_unavailable' ? 'target_unavailable' : 'not_approved'
-          },
-            validateBeforeSend: () => this.checkCurrent(request, approvedSnapshot, true, revision, request.command, rememberedOpen).ok,
-      })
-      if (!ran.ok) {
-        if (!ran.started || ran.reason === 'not_approved' || ran.reason === 'audit_unavailable' || ran.reason === 'target_unavailable') {
-          await this.closeOwnedTab(opened)
-        }
-        return {
-          ok: false,
-            code: ran.started ? 'outcome_unknown' : ran.reason === 'not_ready' ? 'target_unavailable' : ran.reason,
-        }
-      }
-      if (!rememberedOpen && this.connectionCurrent(request.connection) && (revision === undefined || revision === this.memory?.revision?.())) {
-        await this.rememberApprovedOpen(profile, request.connection)
-      }
-      if (closePolicy === 'after-completion' && ran.completionConfirmed && !request.signal?.aborted) {
-        try {
-          await opened.destroy?.()
-        } catch {
-          console.warn('[Secure MCP] Could not close the completed command session.')
-        }
-      }
-      return {
-        ok: true,
-        commandClass: decision.commandClass,
-        output: ran.output,
-        truncated: ran.truncated,
-      }
     } finally {
-      this.presentationInFlight = false
+      try { if (!succeeded) await undoRemember?.() }
+      catch { /* The credential store keeps failed revocations denied until safely saved. */ }
+      finally { tabLease?.release(leaseReusable); this.presentationInFlight = false }
     }
   }
 
-  private async auditCritical(event: AuditEventInput['event'], requestId: string): Promise<boolean> {
+  private async auditCritical(event: AuditEventInput['event'], requestId: string, metadata: Pick<AuditEventInput, 'approvalMode' | 'commandRisk' | 'commandRuleId'> = {}): Promise<boolean> {
     if (!this.effects) return false
-    try { await this.effects.audit.append({ event, result: 'ok', requestId }); return true } catch { return false }
+    try { await this.effects.audit.append({ event, result: 'ok', requestId, ...metadata }); return true } catch { return false }
   }
 
   private presentConnectionApproval(
@@ -576,7 +654,6 @@ export class ApprovalGatekeeper {
     snapshot: ProfileSecuritySnapshot,
     enforceDeadline: boolean,
     revision?: number,
-    command?: string,
     remembered = false,
   ): { ok: true; profile: PartialProfile<Profile> } | { ok: false; code: ApprovalErrorCode } {
     if (request.signal?.aborted) return { ok: false, code: 'cancelled' }
@@ -585,8 +662,6 @@ export class ApprovalGatekeeper {
     try {
       const profile = this.authorizedProfiles.resolveAuthorizedProfileNow(request.profileRef)
       if (!profileSecuritySnapshotsEqual(snapshot, buildProfileSecuritySnapshot(profile, this.runKey))) return { ok: false, code: 'target_unavailable' }
-      const grant = this.memory?.effectiveGrant(profile.id!, stableProfileDigest(profile))
-      if (command && !authorizeSingleSshCommand({ command, grantedTier: grant?.operationTier ?? 'none', grantFresh: true }).ok) return { ok: false, code: 'not_approved' }
       if (remembered && !this.profileHasRememberedOpen(profile, request.connection)) return { ok: false, code: 'not_approved' }
       return { ok: true, profile }
     } catch { return { ok: false, code: 'target_unavailable' } }

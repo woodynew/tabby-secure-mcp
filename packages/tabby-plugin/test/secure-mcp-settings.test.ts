@@ -90,12 +90,12 @@ describe('Secure MCP settings view model', () => {
       {
         profileId: 'ssh-1',
         openSession: true,
-        operationTier: 'readonly',
+        operationTier: 'ask',
         profileDigest: fresh,
         updatedAt: '2026-10-19T00:00:00.000Z',
       },
     ])
-    expect(current[0]).toMatchObject({ operationTier: 'readonly', grantStale: false })
+    expect(current[0]).toMatchObject({ operationTier: 'ask', grantStale: false })
   })
 })
 
@@ -144,7 +144,7 @@ describe('Secure MCP settings grant management', () => {
     expect(component.saving).toBe(false)
   })
 
-  it('persists a tier and clears it when the profile is removed from the whitelist', async () => {
+  it('persists an approval mode and clears it when the profile is removed from the whitelist', async () => {
     const harness = createTabbyConfigProxyHarness()
     const save = vi.fn(async () => undefined)
     const config = { store: harness.store, save }
@@ -171,17 +171,17 @@ describe('Secure MCP settings grant management', () => {
     expect(component.rows[0]).toMatchObject({ selected: false, operationTier: 'none' })
 
     await component.onToggle(component.rows[0]!, true)
-    await component.onTierChange(component.rows[0]!, 'readwrite')
+    await component.onTierChange(component.rows[0]!, 'auto_edit')
 
     expect(component.rows[0]).toMatchObject({
       selected: true,
-      operationTier: 'readwrite',
+      operationTier: 'auto_edit',
       openSession: false,
       grantStale: false,
     })
     expect(readPermanentAuthorizations(harness.store)[0]).toMatchObject({
       profileId: 'ssh-1',
-      operationTier: 'readwrite',
+      operationTier: 'auto_edit',
       profileDigest: stableProfileDigest(profile),
     })
 

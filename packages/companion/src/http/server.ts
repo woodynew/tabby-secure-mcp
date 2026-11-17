@@ -207,7 +207,8 @@ export class EmbeddedMcpServer {
     if (signal.aborted) return { ok: false, code: 'cancelled' }
     if (this.calls >= 4) return { ok: false, code: 'busy' }
     if (!this.callBucket.tryTake()) return { ok: false, code: 'rate_limited' }
-    const deadlineMs = request.method === 'run_authorized_ssh_command' ? 45_000
+    const deadlineMs = request.method === 'upload_ssh_file' || request.method === 'download_ssh_file' ? 180_000
+      : request.method === 'run_authorized_ssh_command' ? APPROVAL_WINDOW_MS + 45_000
       : request.method === 'open_authorized_ssh_profile' ? APPROVAL_WINDOW_MS : 30_000
     const deadlineMonotonicMs = performance.now() + deadlineMs
     const timer = setTimeout(() => deadline.abort(), deadlineMs)

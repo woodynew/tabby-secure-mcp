@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises'
+import { unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -585,7 +586,7 @@ describe('CredentialStore', () => {
     await store.create('editor')
     const valid = JSON.parse(await fs.readFile(file, 'utf8'))
     const bad: unknown[] = [
-      null, {}, { ...valid, extra: true }, { ...valid, version: 3 },
+      null, {}, { ...valid, extra: true }, { ...valid, version: 5 },
       { ...valid, credentials: [...valid.credentials, ...valid.credentials] },
       { ...valid, credentials: [...valid.credentials, { ...valid.credentials[0], id: '00000000-0000-4000-8000-000000000001' }] },
       { ...valid, credentials: Array(33).fill(valid.credentials[0]) },
@@ -865,9 +866,9 @@ describe('CredentialStore', () => {
           return handle
         },
         lstat: (async (...args: Parameters<typeof fs.lstat>) => { assertNotReleased(); return fs.lstat(...args) }) as typeof fs.lstat,
-        unlink: async target => {
+        unlinkSync: target => {
           assertNotReleased()
-          await fs.unlink(target)
+          unlinkSync(target)
           if (armed && String(target).endsWith('.pending')) released = true
         },
       } })
@@ -895,9 +896,9 @@ describe('CredentialStore', () => {
 
   it('retains pending evidence on final unlink failure and can retry from committed memory', async () => {
     let fail = false
-    const { store, file } = await setup({ fs: { unlink: async target => {
+    const { store, file } = await setup({ fs: { unlinkSync: target => {
       if (fail && String(target).endsWith('.pending')) throw new Error('marker unlink failed')
-      return fs.unlink(target)
+      return unlinkSync(target)
     } } })
     const client = await store.create('editor')
     fail = true

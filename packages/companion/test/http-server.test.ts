@@ -9,6 +9,9 @@ class Credentials implements CredentialStorePort {
   records: ClientCredentialView[] = ['A', 'B'].map(id => ({ id, name: 'same name', generation: 1, permission: { kind: 'none' } }))
   listeners = new Set<(id: string) => void>()
   hasUnpersistedRevocations = false
+  fileTransferRevision() { return 0 }
+  hasFileTransferPermission() { return false }
+  async setFileTransferPermission(): Promise<void> { throw new Error('unused') }
   async load() {}
   list() { return this.records }
   async create(): Promise<ClientCredentialView> { throw new Error('unused') }
@@ -147,14 +150,14 @@ describe('embedded HTTP trust and session boundaries', () => {
     expect((await client.callTool({ name: 'list_authorized_ssh_profiles', arguments: {} })).isError).toBeFalsy()
   })
 
-  it('cancels through the SDK client AbortSignal as well as legacy notifications', async () => {
+  it.each(['list_authorized_ssh_profiles', 'close_mcp_ssh_tab'])('cancels %s through the SDK client AbortSignal as well as legacy notifications', async name => {
     let ctx!: HttpCallContext
     let release!: () => void
     const h = await setup({ dispatch: async (_r, context) => { ctx = context; await new Promise<void>(r => { release = r }); return { ok: true, result: { profiles: [] } } } })
     const { client } = await sdk(h.url)
     await approved(h.server)
     const controller = new AbortController()
-    const result = client.callTool({ name: 'list_authorized_ssh_profiles', arguments: {} }, { signal: controller.signal }).catch(error => error)
+    const result = client.callTool({ name, arguments: name === 'close_mcp_ssh_tab' ? { tab_ref: 'tab-a' } : {} }, { signal: controller.signal }).catch(error => error)
     await vi.waitFor(() => expect(ctx).toBeDefined())
     controller.abort()
     await vi.waitFor(() => expect(ctx.signal.aborted).toBe(true))
@@ -167,7 +170,7 @@ describe('embedded HTTP trust and session boundaries', () => {
     let approve!: (v: ApprovalDuration) => void
     const h = await setup({ approveClient: async () => new Promise(r => { approve = r }) })
     const { client } = await sdk(h.url)
-    expect((await client.listTools()).tools).toHaveLength(4)
+    expect((await client.listTools()).tools).toHaveLength(7)
     expect((await client.callTool({ name: 'list_authorized_ssh_profiles', arguments: {} })).isError).toBe(true)
     expect(h.calls).toEqual([])
     approve('session')
@@ -176,6 +179,107 @@ describe('embedded HTTP trust and session boundaries', () => {
     expect((await client.callTool({ name: 'list_authorized_ssh_profiles', arguments: {} })).structuredContent).toEqual({ profiles: [] })
     expect(h.calls[0].requestId).toMatch(/^[a-f0-9]{32}$/)
     expect(h.calls[0].signal.aborted).toBe(false)
+  })
+
+  it('rejects malformed close inputs before dispatch and forwards bounded tab refs with request context', async () => {
+    const dispatch = vi.fn(async () => ({ ok: true as const, result: { status: 'closed' } }))
+    const h = await setup({ dispatch })
+    const { client } = await sdk(h.url)
+    await approved(h.server)
+    for (const args of [
+      {}, { profile_ref: 'profile-a' }, { profile_id: 'profile-a' }, { window_instance_id: 'window-a' },
+      { tab_ref: 'tab-a', extra: true }, { tab_ref: 'tab-a', profile_ref: 'profile-a' },
+      { tab_ref: 'tab-a', window_instance_id: 'window-a' },
+      ...['', 't'.repeat(257), null, 1, [], {}].map(tab_ref => ({ tab_ref })),
+    ]) {
+      expect((await client.callTool({ name: 'close_mcp_ssh_tab', arguments: args })).isError, JSON.stringify(args)).toBe(true)
+    }
+    expect(dispatch).not.toHaveBeenCalled()
+    for (const tab_ref of ['t', 't'.repeat(256)]) {
+      const result = await client.callTool({ name: 'close_mcp_ssh_tab', arguments: { tab_ref } })
+      expect(result.isError).toBeFalsy()
+      expect(result.structuredContent).toEqual({ status: 'closed' })
+      expect(dispatch).toHaveBeenLastCalledWith(
+        { method: 'close_mcp_ssh_tab', params: { tab_ref } },
+        expect.objectContaining({ signal: expect.any(AbortSignal), client: expect.objectContaining({ id: 'A' }), deadlineMonotonicMs: expect.any(Number) }),
+      )
+    }
+  })
+
+  it.each([{}, { tab_ref: 'tab-a' }, { tab_ref: 't'.repeat(256) }, { new_tab: true }, { new_tab: false }, { tab_ref: 'tab-a', new_tab: false }])('forwards command tab selection options unchanged: %j', async options => {
+    const expected = { status: 'completed', command_risk: 'low', output: '', truncated: false, tab_ref: 'tab-a', tab_reusable: false, reused_tab: false }
+    const dispatch = vi.fn(async () => ({ ok: true as const, result: expected }))
+    const h = await setup({ dispatch })
+    const { client } = await sdk(h.url)
+    await approved(h.server)
+    const params = { profile_ref: 'ref-a', command: 'pwd', ...options }
+    const result = await client.callTool({ name: 'run_authorized_ssh_command', arguments: params })
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toEqual(expected)
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ method: 'run_authorized_ssh_command', params }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  })
+
+  it('rejects conflicting or malformed command tab options before dispatch', async () => {
+    const dispatch = vi.fn(async () => ({ ok: true as const, result: {} }))
+    const h = await setup({ dispatch })
+    const { client } = await sdk(h.url)
+    await approved(h.server)
+    for (const options of [
+      { tab_ref: 'tab-a', new_tab: true }, { extra: true },
+      ...['', 't'.repeat(257), null, 1, [], {}].map(tab_ref => ({ tab_ref })),
+      ...['true', 1, null].map(new_tab => ({ new_tab })),
+      { command: '' }, { command: 'x'.repeat(513) }, { command: '字'.repeat(171) },
+    ]) {
+      const result = await client.callTool({ name: 'run_authorized_ssh_command', arguments: { profile_ref: 'ref-a', command: 'pwd', ...options } })
+      expect(result.isError, JSON.stringify(options)).toBe(true)
+    }
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
+  it.each(['upload_ssh_file', 'download_ssh_file'] as const)('validates and forwards %s with safe transfer failures', async name => {
+    const status = name === 'upload_ssh_file' ? 'uploaded' : 'downloaded'
+    const params = { profile_ref: 'ref', local_path: '/tmp/local file', remote_path: '/tmp/remote file' }
+    const dispatch = vi.fn(async () => ({ ok: true as const, result: { status, bytes_transferred: 0 } }))
+    const h = await setup({ dispatch })
+    const { client } = await sdk(h.url)
+    await approved(h.server)
+    for (const field of ['local_path', 'remote_path']) {
+      for (const value of ['', 'a'.repeat(4097), null, 1, 'a\0b', 'a\nb', 'a\rb', 'a\tb', 'a\u001bb', 'a\u007fb', 'a\u0085b', 'a\u2028b', 'a\u2029b']) {
+        expect((await client.callTool({ name, arguments: { ...params, [field]: value } })).isError).toBe(true)
+      }
+    }
+    for (const extra of [{ overwrite: true }, { mkdir: true }, { recursive: true }, { tab_ref: 'tab-1' }]) {
+      expect((await client.callTool({ name, arguments: { ...params, ...extra } })).isError).toBe(true)
+    }
+    expect(dispatch).not.toHaveBeenCalled()
+    const result = await client.callTool({ name, arguments: params })
+    expect(result.structuredContent).toEqual({ status, bytes_transferred: 0 })
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ method: name, params }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    for (const field of ['local_path', 'remote_path']) {
+      const atLimit = { ...params, [field]: '/' + 'a'.repeat(4095) }
+      expect((await client.callTool({ name, arguments: atLimit })).isError).toBeFalsy()
+      expect(dispatch).toHaveBeenLastCalledWith({ method: name, params: atLimit }, expect.anything())
+    }
+  })
+
+  it.each(['upload_ssh_file', 'download_ssh_file'] as const)('maps stable errors from %s without exposing causes', async name => {
+    const failures = [
+      ['file_transfer_disabled', 'File transfer is disabled for this client and SSH profile. Enable it in Tabby.'],
+      ['file_transfer_failed', 'The file transfer failed. Check Tabby before retrying.'],
+      ['file_exists', 'The destination file already exists. Overwriting is not allowed.'],
+      ['file_too_large', 'The file exceeds the 64 MiB transfer limit.'],
+      ['invalid_path', 'Use absolute paths to single files on the Tabby machine and SSH host.'],
+    ] as const
+    let code: (typeof failures)[number][0] = 'file_transfer_disabled'
+    const h = await setup({ dispatch: async () => ({ ok: false, code }) })
+    const { client } = await sdk(h.url)
+    await approved(h.server)
+    for (const [next, text] of failures) {
+      code = next
+      const result = await client.callTool({ name, arguments: { profile_ref: 'ref', local_path: '/tmp/local', remote_path: '/tmp/remote' } })
+      expect(result.isError).toBe(true)
+      expect(result.content).toEqual([{ type: 'text', text }])
+    }
   })
 
   it('bounds pending approval to one and destroys denied sessions', async () => {
@@ -332,7 +436,12 @@ describe('embedded HTTP trust and session boundaries', () => {
     release()
   })
 
-  it('keeps an SSH open request alive for a full minute while preserving the command deadline', async () => {
+  it.each([
+    ['open_authorized_ssh_profile', 60_000],
+    ['run_authorized_ssh_command', 105_000],
+    ['upload_ssh_file', 180_000],
+    ['download_ssh_file', 180_000],
+  ] as const)('budgets approval and execution for %s', async (name, deadlineMs) => {
     let context!: HttpCallContext
     const h = await setup({ dispatch: async (_r, ctx) => {
       context = ctx
@@ -341,11 +450,11 @@ describe('embedded HTTP trust and session boundaries', () => {
     const { transport } = await sdk(h.url)
     await approved(h.server)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
-    const opening = raw(h.url, { ...listCall, params: { name: 'open_authorized_ssh_profile', arguments: { profile_ref: 'ref' } } }, { 'Mcp-Session-Id': transport.sessionId! })
+    const opening = raw(h.url, { ...listCall, params: { name, arguments: { profile_ref: 'ref', ...(name === 'run_authorized_ssh_command' ? { command: 'id' } : name === 'upload_ssh_file' || name === 'download_ssh_file' ? { local_path: '/tmp/local', remote_path: '/tmp/remote' } : {}) } } }, { 'Mcp-Session-Id': transport.sessionId! })
     while (!context) await new Promise<void>(resolve => setImmediate(resolve))
     const start = performance.now()
-    expect(context.deadlineMonotonicMs - start).toBe(60_000)
-    await vi.advanceTimersByTimeAsync(59_999)
+    expect(context.deadlineMonotonicMs - start).toBe(deadlineMs)
+    await vi.advanceTimersByTimeAsync(deadlineMs - 1)
     expect(context.signal.aborted).toBe(false)
     await vi.advanceTimersByTimeAsync(1)
     expect(context.signal.aborted).toBe(true)

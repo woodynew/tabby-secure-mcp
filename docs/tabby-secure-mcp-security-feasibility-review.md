@@ -1,5 +1,7 @@
 # Tabby Secure MCP 安全可行性评审
 
+> 2026-11-16 更新：本文原有只读／读写／完全控制等级描述属于历史基线。当前实现改为请求审批／自动编辑／完全访问及可编辑命令集；以 [审批模式设计](superpowers/specs/2026-11-16-command-approval-modes-design.md) 和 [接入说明](configure-mcp-clients.md) 为准。
+
 > 评审日期：2026-10-15
 >
 > 评审对象：提案中的安全模型、Tabby API 伪代码、MCP 传输与目标客户端兼容性

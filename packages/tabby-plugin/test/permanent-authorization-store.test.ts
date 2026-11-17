@@ -47,7 +47,7 @@ describe('PermanentAuthorizationStore', () => {
     harness.store.secureMcp.authorizedSshProfileIds = ['ssh-1']
     const store = new PermanentAuthorizationStore(config as never)
 
-    await store.setManagedGrant('ssh-1', profile, { openSession: true, operationTier: 'readonly' })
+    await store.setManagedGrant('ssh-1', profile, { openSession: true, operationTier: 'auto_edit' })
     await store.setManagedGrant('ssh-1', profile, { openSession: false, operationTier: 'none' })
 
     expect(store.list()).toEqual([])

@@ -3,6 +3,16 @@ import { describe, expect, it } from 'vitest'
 import { secureMcpSettingsTemplate } from '../src/settings/secure-mcp-settings.template'
 
 describe('Secure MCP settings template', () => {
+  it('binds file transfer to each selected client and SSH target without a global toggle', () => {
+    const row = secureMcpSettingsTemplate.match(/<div class="connection-row"[\s\S]*?<\/div><p \*ngIf="!loading/)?.[0] ?? ''
+    expect(row).toContain('[checked]="clientFileTransferEnabled(client, row)"')
+    expect(row).toContain('(change)="onChangeClientFileTransfer(client, row, $any($event.target).checked, $any($event.target))"')
+    expect(row).toMatch(/<input type="checkbox"[^>]*\[disabled\]="!canManage \|\| saving"/)
+    expect(row).toContain("'secureMcp.enableFileTransfer' | translate")
+    expect(secureMcpSettingsTemplate.match(/clientFileTransferEnabled\(/g)).toHaveLength(1)
+    expect(secureMcpSettingsTemplate.match(/'secureMcp.fileTransferHelp' \| translate/g)).toHaveLength(1)
+  })
+
   it('offers both global command-session close policies with an accessible label', () => {
     expect(secureMcpSettingsTemplate).toContain('for="command-session-close-policy"')
     expect(secureMcpSettingsTemplate).toContain('id="command-session-close-policy"')

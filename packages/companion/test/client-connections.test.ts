@@ -67,7 +67,8 @@ describe('client-scoped SSH connection permissions', () => {
     const token = store.tokenFor(a.id)
     const legacy = JSON.parse(await fs.readFile(file, 'utf8'))
     legacy.version = 1
-    for (const record of legacy.credentials) delete record.connections
+    delete legacy.defaultCommands
+    for (const record of legacy.credentials) { delete record.connections; delete record.commandSets; delete record.fileTransfers }
     await fs.writeFile(file, JSON.stringify(legacy))
     const upgraded = new CredentialStore(file)
     await upgraded.load()
@@ -75,7 +76,8 @@ describe('client-scoped SSH connection permissions', () => {
     await upgraded.setConnectionPermission(a, 'ssh-p', digest)
     expect(upgraded.tokenFor(a.id)).toBe(token)
     expect(upgraded.permission(a.id).kind).toBe('permanent')
-    expect(JSON.parse(await fs.readFile(file, 'utf8')).version).toBe(2)
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).version).toBe(4)
+    expect(upgraded.hasFileTransferPermission(a, 'ssh-p', digest)).toBe(false)
   })
 
   it('keeps a newer revocation effective while an older approval is committing', async () => {

@@ -8,13 +8,13 @@ export interface ApprovalPresentationContext {
   remainingSeconds(): number
 }
 
-export async function presentWithApprovalDeadline(input: {
+export async function presentWithApprovalDeadline<T extends ApprovalDecision | 'remember' = ApprovalDecision>(input: {
   clock: MonotonicClock
   scheduler: ApprovalScheduler
   deadlineMonotonicMs: number
   userSignal?: AbortSignal
-  present: (context: ApprovalPresentationContext) => Promise<ApprovalDecision>
-}): Promise<ApprovalDecision> {
+  present: (context: ApprovalPresentationContext) => Promise<T>
+}): Promise<T | 'deny'> {
   const controller = new AbortController()
   const abortFromUser = (): void => {
     if (input.userSignal?.aborted) {
@@ -31,7 +31,7 @@ export async function presentWithApprovalDeadline(input: {
       Math.max(0, Math.ceil((input.deadlineMonotonicMs - input.clock.now()) / 1000)),
   }
 
-  let presenterDecision = 'deny' as ApprovalDecision
+  let presenterDecision = 'deny' as T | 'deny'
   let presenterSettled = false
   let gateClosed = false
 
@@ -77,7 +77,7 @@ export async function presentWithApprovalDeadline(input: {
   const approved =
     raceOutcome === 'presenter' &&
     presenterSettled &&
-    presenterDecision === 'allow' &&
+    (presenterDecision === 'allow' || presenterDecision === 'remember') &&
     input.clock.now() < input.deadlineMonotonicMs &&
     !controller.signal.aborted &&
     !input.userSignal?.aborted
@@ -86,5 +86,5 @@ export async function presentWithApprovalDeadline(input: {
   controller.abort()
   input.userSignal?.removeEventListener('abort', abortFromUser)
 
-  return approved ? 'allow' : 'deny'
+  return approved ? presenterDecision : 'deny'
 }

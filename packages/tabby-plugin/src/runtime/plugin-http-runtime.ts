@@ -8,12 +8,17 @@ import {
 } from '@tabby-secure-mcp/companion'
 import { resolveAuditLogPath } from '../audit/audit-paths'
 import type { AuditService } from '../audit/audit-service'
-import type { ApprovalGatekeeper } from '../approval/approval-gatekeeper'
+import type { ApprovalGatekeeper, ClientConnectionContext } from '../approval/approval-gatekeeper'
 import type { NgBootstrapApprovalPresenter } from '../approval/ng-bootstrap-approval-presenter'
 import { sanitizeApprovalDisplayText } from '../approval/display-sanitizer'
 import type { AuthorizedProfilesService } from '../services/authorized-profiles.service'
 import type { RuntimeLeaseState } from './runtime-lease-state'
 import type { WindowBootstrapSource } from './bootstrap-data'
+import { McpOwnedTabs, type RetainedTabMetadata, type TabLease } from './mcp-owned-tabs'
+import { stableProfileDigest } from '../approval/profile-security-snapshot'
+import { isSingleCommandTab, waitUntilSessionOpen } from '../ssh/ssh-command-runner'
+import { SystemApprovalScheduler } from '../approval/approval-scheduler'
+import { FileTransferError, transferSshFile, type SftpSessionPort } from '../ssh/sftp-file-transfer'
 
 interface ServerConfig { enabled: boolean; port: number }
 interface HttpRuntimeDependencies {
@@ -47,6 +52,7 @@ export class PluginHttpRuntime {
   private chain: Promise<void> = Promise.resolve()
   private readonly listeners = new Set<() => void>()
   private readonly cleanup: (() => void)[] = []
+  private readonly ownedTabs = new McpOwnedTabs()
 
   constructor(
     private readonly config: ConfigService,
@@ -103,6 +109,7 @@ export class PluginHttpRuntime {
 
   private stopNow(): Promise<void> {
     ++this.generation
+    this.ownedTabs.clear()
     this.lease.clear()
     this.profiles.clearRefCache()
     const previous = this.server
@@ -221,9 +228,11 @@ export class PluginHttpRuntime {
             const value = await this.gatekeeper.describeOperationAuthorization(request.params.profile_ref, connection)
           if (!current()) return { ok: false, code: 'cancelled' }
           if (!value.ok) return value
-          return { ok: true, result: { profile_ref: value.profileRef, open_session: value.openSession, operation_tier: value.operationTier, authorizes: 'ssh_command', policy: value.policy } }
+          return { ok: true, result: { profile_ref: value.profileRef, open_session: value.openSession, approval_mode: value.operationTier, authorizes: 'ssh_command', policy: value.policy } }
         }
         case 'open_authorized_ssh_profile': {
+          let retainedTab: unknown
+          let tabMetadata: RetainedTabMetadata | undefined
           await this.audit.append({ event: 'open_requested', result: 'ok', requestId })
           if (!current() || this.approvingClient) {
             const code = current() ? 'busy' : 'cancelled'
@@ -231,7 +240,10 @@ export class PluginHttpRuntime {
             return { ok: false, code }
           }
           mayHaveExecuted = true
-            const value = await this.gatekeeper.requestOpen({ requestId, leaseEpoch: generation, profileRef: request.params.profile_ref, clientIdentity: context.client.name, toolName: request.method, operation: request, deadlineMonotonicMs, signal, connection })
+            const value = await this.gatekeeper.requestOpen({ requestId, leaseEpoch: generation, profileRef: request.params.profile_ref, clientIdentity: context.client.name, toolName: request.method, operation: request, deadlineMonotonicMs, signal, connection, onRetainedTab: (tab, metadata) => {
+              retainedTab = tab; tabMetadata = metadata
+              if (current()) this.ownedTabs.track(context.client, tab, metadata, metadata?.reusable ?? false)
+            } })
           if (!value.ok) {
             mayHaveExecuted = value.code === 'outcome_unknown' || value.code === 'target_unavailable'
             await this.audit.append({ event: 'open_result', result: 'error', requestId, errorCode: value.code })
@@ -239,11 +251,24 @@ export class PluginHttpRuntime {
           }
           await this.audit.append({ event: 'open_result', result: 'ok', requestId })
           if (!current()) return { ok: false, code: 'outcome_unknown' }
-          return { ok: true, result: { status: 'opened' } }
+          const tabRef = this.ownedTabs.track(context.client, retainedTab, tabMetadata, tabMetadata?.reusable ?? false)
+          return { ok: true, result: { status: 'opened', ...(tabRef ? { tab_ref: tabRef, tab_reusable: this.ownedTabs.reusable(tabRef, context.client) } : {}) } }
         }
         case 'run_authorized_ssh_command': {
+          let retainedTab: unknown
+          let tabMetadata: RetainedTabMetadata | undefined
+          if (request.params.tab_ref !== undefined && request.params.new_tab === true) return { ok: false, code: 'unsupported_command' }
           mayHaveExecuted = true
-            const value = await this.gatekeeper.runAuthorizedSshCommand({ requestId, leaseEpoch: generation, profileRef: request.params.profile_ref, command: request.params.command, deadlineMonotonicMs, signal, connection })
+            const value = await this.gatekeeper.runAuthorizedSshCommand({ requestId, leaseEpoch: generation, profileRef: request.params.profile_ref, command: request.params.command, deadlineMonotonicMs, signal, connection,
+              acquireTab: target => request.params.new_tab === true ? { ok: true } : this.ownedTabs.acquire(context.client, target, request.params.tab_ref),
+              onCreatedTab: (tab, metadata) => {
+                if (!current()) return undefined
+                const ref = this.ownedTabs.track(context.client, tab, metadata, true)
+                if (!ref) return undefined
+                const acquired = this.ownedTabs.acquire(context.client, metadata, ref)
+                return acquired.ok ? acquired.lease : undefined
+              },
+              onRetainedTab: (tab, metadata) => { retainedTab = tab; tabMetadata = metadata } })
           if (!value.ok) {
             mayHaveExecuted = value.code === 'outcome_unknown' || value.code === 'target_unavailable'
             await this.audit.append({ event: 'command_result', result: 'error', requestId, errorCode: value.code })
@@ -251,9 +276,153 @@ export class PluginHttpRuntime {
           }
           await this.audit.append({ event: 'command_result', result: 'ok', requestId })
           if (!current()) return { ok: false, code: 'outcome_unknown' }
-          return { ok: true, result: { status: value.truncated ? 'truncated' : 'completed', command_class: value.commandClass, output: value.output, truncated: value.truncated } }
+          const tabRef = this.ownedTabs.track(context.client, retainedTab, tabMetadata, tabMetadata?.reusable ?? false)
+          return { ok: true, result: { status: value.truncated ? 'truncated' : 'completed', command_risk: value.commandRisk, output: value.output, truncated: value.truncated,
+            ...(tabRef ? { tab_ref: tabRef, tab_reusable: this.ownedTabs.reusable(tabRef, context.client), reused_tab: tabMetadata?.reused ?? false } : {}) } }
         }
+        case 'close_mcp_ssh_tab': {
+          const ref = request.params.tab_ref
+          if (!this.ownedTabs.owns(ref, context.client)) return { ok: false, code: 'target_unavailable' }
+          if (performance.now() >= deadlineMonotonicMs) return { ok: false, code: 'expired' }
+          await this.audit.append({ event: 'tab_close_requested', result: 'ok', requestId })
+          if (!current()) return { ok: false, code: 'cancelled' }
+          if (performance.now() >= deadlineMonotonicMs) return { ok: false, code: 'expired' }
+          mayHaveExecuted = true
+          const value = await this.ownedTabs.close(ref, context.client, () => current() && performance.now() < deadlineMonotonicMs)
+          if (!value.ok) {
+            mayHaveExecuted = value.code === 'outcome_unknown'
+            await this.audit.append({ event: 'tab_close_result', result: 'error', requestId, errorCode: value.code })
+            return value
+          }
+          await this.audit.append({ event: 'tab_close_result', result: 'ok', requestId })
+          if (!current()) return { ok: false, code: 'outcome_unknown' }
+          return { ok: true, result: { status: 'closed' } }
+        }
+        case 'upload_ssh_file':
+        case 'download_ssh_file':
+          return await this.transferFile(request, context, generation, connection)
       }
     } catch { return { ok: false, code: mayHaveExecuted ? 'outcome_unknown' : 'audit_unavailable' } }
+  }
+
+  private async transferFile(
+    request: Extract<OperationalRequest, { method: 'upload_ssh_file' | 'download_ssh_file' }>,
+    context: HttpCallContext, generation: number, connection: ClientConnectionContext,
+  ): Promise<HttpCallResult> {
+    const { client, requestId, deadlineMonotonicMs } = context
+    const controller = new AbortController()
+    const onAbort = () => controller.abort()
+    context.signal.addEventListener('abort', onAbort, { once: true })
+    if (context.signal.aborted) onAbort()
+    const signal = controller.signal
+    let lease: TabLease | undefined
+    let tab: unknown
+    let tabRef: string | undefined
+    let created = false, completed = false, ioStarted = false, auditing = false
+    let stopCredentials: (() => void) | undefined
+    let stopConfig: { unsubscribe(): void } | undefined
+    let stage: 'opening' | 'transfer' = 'opening'
+    try {
+      await this.profiles.listAuthorizedProfiles()
+      const profile = await this.profiles.resolveAuthorizedProfile(request.params.profile_ref)
+      if (!profile.id) return { ok: false, code: 'target_unavailable' }
+      const target = { profileId: profile.id, profileDigest: stableProfileDigest(profile) }
+      if (!this.credentials.hasFileTransferPermission?.(client, target.profileId, target.profileDigest)) return { ok: false, code: 'file_transfer_disabled' }
+      const version = this.credentials.fileTransferRevision()
+      const valid = () => {
+        try {
+          return !this.destroyed && this.status === 'running' && this.generation === generation
+            && this.credentials.isCurrent(client) && this.credentials.fileTransferRevision() === version
+            && stableProfileDigest(this.profiles.resolveAuthorizedProfileNow(request.params.profile_ref)) === target.profileDigest
+            && (stage === 'opening' || (this.credentials.hasFileTransferPermission(client, target.profileId, target.profileDigest)
+              && this.credentials.connectionRevision(client) === connection.revision && !!lease?.isCurrent()))
+        } catch { return false }
+      }
+      const check = () => {
+        if (performance.now() >= deadlineMonotonicMs) throw new FileTransferError('expired')
+        if (!valid()) throw new FileTransferError('file_transfer_disabled')
+        if (signal.aborted) throw new FileTransferError('cancelled')
+      }
+      const changed = () => { if (!valid()) controller.abort() }
+      stopCredentials = this.credentials.onChange(changed)
+      stopConfig = this.config.changed$?.subscribe(changed)
+      auditing = true
+      await this.audit.append({ event: 'file_transfer_requested', result: 'ok', requestId })
+      auditing = false
+      check()
+      const acquired = this.credentials.hasConnectionPermission(client, target.profileId, target.profileDigest)
+        ? this.ownedTabs.acquire(client, target) : { ok: true as const }
+      if (!acquired.ok) return acquired
+      lease = acquired.lease
+      tab = lease?.tab
+      if (!lease) {
+        const value = await this.gatekeeper.requestOpen({ requestId, leaseEpoch: generation, profileRef: request.params.profile_ref,
+          clientIdentity: client.name, toolName: 'open_authorized_ssh_profile',
+          operation: { method: 'open_authorized_ssh_profile', params: { profile_ref: request.params.profile_ref } },
+          deadlineMonotonicMs, signal, connection,
+          onRetainedTab: (opened, metadata) => {
+            tab = opened
+            created = true
+            tabRef = this.ownedTabs.track(client, opened, metadata, true)
+          } })
+        if (!value.ok) return value
+        if (!tabRef) throw new FileTransferError('file_transfer_failed')
+        const selected = this.ownedTabs.acquire(client, target, tabRef)
+        if (!selected.ok || !selected.lease) throw new FileTransferError('target_unavailable')
+        lease = selected.lease
+      }
+      stage = 'transfer'
+      check()
+      if (!isSingleCommandTab(tab)) throw new FileTransferError('file_transfer_failed')
+      if (!await waitUntilSessionOpen({ tab, signal, deadlineMonotonicMs, clock: { now: () => performance.now() }, scheduler: new SystemApprovalScheduler() })) {
+        throw new FileTransferError(signal.aborted ? 'cancelled' : 'expired')
+      }
+      check()
+      const native = tab as typeof tab & { sshSession?: { openSFTP(): Promise<SftpSessionPort> } }
+      const ssh = native.sshSession
+      const shell = native.session
+      if (!ssh || typeof ssh.openSFTP !== 'function') throw new FileTransferError('file_transfer_failed')
+      const sftp = await new Promise<SftpSessionPort>((resolve, reject) => {
+        const abort = () => reject(new FileTransferError('cancelled'))
+        signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) { abort(); return }
+        Promise.resolve().then(() => { check(); return ssh.openSFTP() }).then(
+          value => { signal.removeEventListener('abort', abort); resolve(value) },
+          error => { signal.removeEventListener('abort', abort); reject(error) },
+        )
+      })
+      const current = () => valid() && native.session === shell && native.sshSession === ssh
+      check()
+      ioStarted = true
+      const result = await transferSshFile({ direction: request.method === 'upload_ssh_file' ? 'upload' : 'download',
+        localPath: request.params.local_path, remotePath: request.params.remote_path, sftp, current, signal, deadlineMonotonicMs })
+      if (!current() || signal.aborted) throw new FileTransferError('outcome_unknown')
+      auditing = true
+      await this.audit.append({ event: 'file_transfer_result', result: 'ok', requestId })
+      auditing = false
+      if (!current() || signal.aborted) throw new FileTransferError('outcome_unknown')
+      completed = true
+      const published = this.ownedTabs.track(client, tab, { ...target, session: shell ?? undefined, wasOpen: true }, true)
+      lease.release(true)
+      lease = undefined
+      return { ok: true, result: { status: request.method === 'upload_ssh_file' ? 'uploaded' : 'downloaded', bytes_transferred: result.bytesTransferred,
+        ...(published ? { tab_ref: published, tab_reusable: this.ownedTabs.reusable(published, client) } : {}) } }
+    } catch (error) {
+      const code = error instanceof FileTransferError ? error.code
+        : auditing ? ioStarted ? 'outcome_unknown' : 'audit_unavailable' : 'file_transfer_failed'
+      if (!auditing) {
+        try { await this.audit.append({ event: 'file_transfer_result', result: 'error', requestId, errorCode: code }) } catch { /* Preserve the known transfer failure. */ }
+      }
+      return { ok: false, code }
+    } finally {
+      context.signal.removeEventListener('abort', onAbort)
+      stopCredentials?.()
+      stopConfig?.unsubscribe()
+      const canClose = lease ? lease.isCurrent() : !!tabRef && this.ownedTabs.reusable(tabRef, client)
+      lease?.release(true)
+      if (!completed && created && canClose && tab && typeof (tab as { destroy?: unknown }).destroy === 'function') {
+        try { await (tab as { destroy(): void | Promise<void> }).destroy() } catch { /* Never close any borrowed or manually taken-over tab. */ }
+      }
+    }
   }
 }

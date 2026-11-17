@@ -8,7 +8,8 @@ import { EmbeddedMcpServer } from '../src/http/server.js'
 import { CredentialStore } from '../src/http/credentials.js'
 import type { CredentialStorePort, HttpCallContext } from '../src/http/contracts.js'
 
-it('negotiates stateful JSON HTTP and preserves all four tool contracts without the socket gateway', async () => {
+it.each([true, false])('negotiates all seven tool contracts over stateful JSON HTTP (retained command tab: %s)', async retainCommandTab => {
+  const runOptions = retainCommandTab ? { tab_ref: 'tab-a', new_tab: false } : { new_tab: true }
   const identity = { id: 'client-a', generation: 1, name: 'SDK integration' }
   const credentials: CredentialStorePort = {
     load: async () => {}, list: () => [{ ...identity, permission: { kind: 'none' } }],
@@ -18,7 +19,12 @@ it('negotiates stateful JSON HTTP and preserves all four tool contracts without 
     isCurrent: client => client.id === identity.id && client.generation === 1,
     permission: () => ({ kind: 'none' }), grant: async () => {},
     onInvalidated: () => () => {}, onChange: () => () => {}, hasUnpersistedRevocations: false,
+    fileTransferRevision: () => 0, hasFileTransferPermission: () => false,
+    setFileTransferPermission: async () => { throw new Error('unused') },
   }
+  const realNow = performance.now.bind(performance)
+  let elapsed = 0
+  const clock = vi.spyOn(performance, 'now').mockImplementation(() => realNow() + elapsed)
   const contexts: HttpCallContext[] = []
   const server = new EmbeddedMcpServer({
     port: 0, credentials, approveClient: async () => 'session', audit: async () => {},
@@ -26,9 +32,18 @@ it('negotiates stateful JSON HTTP and preserves all four tool contracts without 
       contexts.push(context)
       switch (request.method) {
         case 'list_authorized_ssh_profiles': return { ok: true, result: { profiles: [{ profile_ref: 'ref-a', display_name: 'Test' }] } }
-        case 'open_authorized_ssh_profile': return { ok: true, result: { status: 'opened' } }
-        case 'get_ssh_operation_authorization': return { ok: true, result: { profile_ref: request.params.profile_ref, open_session: true, operation_tier: 'readonly', authorizes: 'ssh_command', policy: [] } }
-        case 'run_authorized_ssh_command': return { ok: true, result: { status: 'completed', command_class: 'read_only', output: 'hello', truncated: false } }
+        case 'open_authorized_ssh_profile': return { ok: true, result: { status: 'opened', tab_ref: 'tab-a', tab_reusable: true } }
+        case 'close_mcp_ssh_tab':
+          expect(request.params).toEqual({ tab_ref: 'tab-a' })
+          return { ok: true, result: { status: 'closed' } }
+        case 'get_ssh_operation_authorization': return { ok: true, result: { profile_ref: request.params.profile_ref, open_session: true, approval_mode: 'auto_edit', authorizes: 'ssh_command', policy: [] } }
+        case 'run_authorized_ssh_command':
+          expect(request.params).toEqual({ profile_ref: 'ref-a', command: 'echo hello', ...runOptions })
+          return { ok: true, result: { status: 'completed', command_risk: 'low', output: 'hello', truncated: false, ...(retainCommandTab ? { tab_ref: 'tab-a', tab_reusable: true, reused_tab: true } : {}) } }
+        case 'upload_ssh_file':
+        case 'download_ssh_file':
+          expect(request.params).toEqual({ profile_ref: 'ref-a', local_path: '/tmp/local file', remote_path: '/tmp/remote file' })
+          return { ok: true, result: { status: request.method === 'upload_ssh_file' ? 'uploaded' : 'downloaded', bytes_transferred: 123, tab_ref: 'tab-a', tab_reusable: false } }
       }
     },
   })
@@ -40,24 +55,31 @@ it('negotiates stateful JSON HTTP and preserves all four tool contracts without 
     await client.connect(transport)
     expect(transport.sessionId).toBeTruthy()
     const tools = await client.listTools()
-    expect(tools.tools.map(t => t.name).sort()).toEqual(['get_ssh_operation_authorization', 'list_authorized_ssh_profiles', 'open_authorized_ssh_profile', 'run_authorized_ssh_command'])
+    expect(tools.tools.map(t => t.name).sort()).toEqual(['close_mcp_ssh_tab', 'download_ssh_file', 'get_ssh_operation_authorization', 'list_authorized_ssh_profiles', 'open_authorized_ssh_profile', 'run_authorized_ssh_command', 'upload_ssh_file'])
+    const conflict = await client.callTool({ name: 'run_authorized_ssh_command', arguments: { profile_ref: 'ref-a', command: 'pwd', tab_ref: 'tab-a', new_tab: true } })
+    expect(conflict.isError).toBe(true)
+    expect(contexts).toHaveLength(0)
     const cases = [
       ['list_authorized_ssh_profiles', {}, { profiles: [{ profile_ref: 'ref-a', display_name: 'Test' }] }],
-      ['open_authorized_ssh_profile', { profile_ref: 'ref-a' }, { status: 'opened' }],
-      ['get_ssh_operation_authorization', { profile_ref: 'ref-a' }, { profile_ref: 'ref-a', open_session: true, operation_tier: 'readonly', authorizes: 'ssh_command', policy: [] }],
-      ['run_authorized_ssh_command', { profile_ref: 'ref-a', command: 'echo hello' }, { status: 'completed', command_class: 'read_only', output: 'hello', truncated: false }],
+      ['open_authorized_ssh_profile', { profile_ref: 'ref-a' }, { status: 'opened', tab_ref: 'tab-a', tab_reusable: true }],
+      ['get_ssh_operation_authorization', { profile_ref: 'ref-a' }, { profile_ref: 'ref-a', open_session: true, approval_mode: 'auto_edit', authorizes: 'ssh_command', policy: [] }],
+      ['run_authorized_ssh_command', { profile_ref: 'ref-a', command: 'echo hello', ...runOptions }, { status: 'completed', command_risk: 'low', output: 'hello', truncated: false, ...(retainCommandTab ? { tab_ref: 'tab-a', tab_reusable: true, reused_tab: true } : {}) }],
+      ['close_mcp_ssh_tab', { tab_ref: 'tab-a' }, { status: 'closed' }],
+      ['upload_ssh_file', { profile_ref: 'ref-a', local_path: '/tmp/local file', remote_path: '/tmp/remote file' }, { status: 'uploaded', bytes_transferred: 123, tab_ref: 'tab-a', tab_reusable: false }],
+      ['download_ssh_file', { profile_ref: 'ref-a', local_path: '/tmp/local file', remote_path: '/tmp/remote file' }, { status: 'downloaded', bytes_transferred: 123, tab_ref: 'tab-a', tab_reusable: false }],
     ] as const
     for (const [name, args, expected] of cases) {
+      if (name === 'upload_ssh_file') elapsed += 6_000 // Refill two tokens for the additional file tools.
       const result = await client.callTool({ name, arguments: args })
       expect(result.isError).toBeFalsy()
       expect(result.structuredContent).toEqual(expected)
       expect(result.content).toEqual([{ type: 'text', text: JSON.stringify(expected) }])
     }
-    expect(new Set(contexts.map(c => c.requestId)).size).toBe(4)
+    expect(new Set(contexts.map(c => c.requestId)).size).toBe(7)
     expect(contexts.every(c => c.client.id === 'client-a' && !c.signal.aborted && c.deadlineMonotonicMs > performance.now())).toBe(true)
     await transport.terminateSession()
     expect(server.sessionViews()).toEqual([])
-  } finally { await client.close(); await server.close() }
+  } finally { await client.close(); await server.close(); clock.mockRestore() }
 })
 
 it('changes an existing client lifetime over real HTTP while keeping its token and other clients intact', async () => {
