@@ -8,6 +8,8 @@ import {
   type ApprovalPresenter,
   type OpenApprovalViewModel,
   type PairingApprovalViewModel,
+  type CommandApprovalViewModel,
+  type CommandApprovalDecision,
 } from './approval-presenter'
 import { OpenApprovalModalComponent } from './open-approval-modal.component'
 import type { ApprovalDuration } from '@tabby-secure-mcp/companion'
@@ -42,11 +44,17 @@ export class NgBootstrapApprovalPresenter implements ApprovalPresenter {
     return await this.presentModal(OpenApprovalModalComponent, viewModel, context) === 'allow' ? 'allow' : 'deny'
   }
 
+  async presentCommand(viewModel: CommandApprovalViewModel, context: ApprovalPresentationContext): Promise<CommandApprovalDecision> {
+    const result = await this.presentModal(OpenApprovalModalComponent, { ...viewModel, commandMode: true }, context)
+    if (result === 'remember') return viewModel.allowRemember ? 'remember' : 'deny'
+    return result === 'allow' ? 'allow' : 'deny'
+  }
+
   private async presentModal(
     component: typeof PairingApprovalModalComponent | typeof OpenApprovalModalComponent,
-    viewModel: PairingApprovalViewModel | OpenApprovalViewModel,
+    viewModel: PairingApprovalViewModel | OpenApprovalViewModel | (CommandApprovalViewModel & { commandMode: boolean }),
     context: ApprovalPresentationContext,
-  ): Promise<ApprovalDecision | ApprovalDuration> {
+  ): Promise<CommandApprovalDecision | ApprovalDuration> {
     if (context.signal.aborted || performance.now() >= context.deadlineMonotonicMs) {
       return 'deny'
     }
@@ -80,7 +88,7 @@ export class NgBootstrapApprovalPresenter implements ApprovalPresenter {
     try {
       const result = await modalRef.result
       if (context.signal.aborted || performance.now() >= context.deadlineMonotonicMs) return 'deny'
-      return ['allow', 'session', '24h', 'permanent'].includes(result) ? result : 'deny'
+      return ['allow', 'remember', 'session', '24h', 'permanent'].includes(result) ? result : 'deny'
     } catch {
       return 'deny'
     } finally {

@@ -76,7 +76,7 @@ describe('execution security regressions', () => {
   it('does not send after authorization is revoked while the new session connects', async () => {
     const f = fixture()
     const req = await request(f)
-    await f.memory.setManagedGrant('p', f.profile, { openSession: true, operationTier: 'readonly' })
+    await f.memory.setManagedGrant('p', f.profile, { openSession: true, operationTier: 'auto_edit' })
     f.tab.session.open = false
     const running = f.gate.runAuthorizedSshCommand({ ...req, command: 'ls' })
     await vi.waitFor(() => expect(f.profiles.openNewTabForProfile).toHaveBeenCalled())

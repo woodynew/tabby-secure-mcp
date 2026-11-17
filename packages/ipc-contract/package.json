@@ -17,6 +17,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./command-policy": {
+      "types": "./dist/command-policy.d.ts",
+      "import": "./dist/command-policy.js"
     }
   },
   "scripts": {
@@ -32,5 +36,12 @@
   "devDependencies": {
     "@types/node": "22.15.3",
     "typescript": "7.0.2"
+  },
+  "typesVersions": {
+    "*": {
+      "command-policy": [
+        "dist/command-policy.d.ts"
+      ]
+    }
   }
 }

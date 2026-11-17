@@ -60,8 +60,8 @@ export class PermanentAuthorizationStore implements AuthorizationMemory {
     update: { openSession: boolean; operationTier: GrantedOperationTier },
   ): Promise<void> {
     const previous = storedPermanentAuthorizations(this.config.store, this.config).find(item => item.profileId === profileId)
-    const rank = { none: 0, readonly: 1, readwrite: 2, full: 3 }
-    const revokes = !!previous && ((previous.openSession && !update.openSession) || rank[update.operationTier] < rank[previous.operationTier])
+    // Modes are not a strict privilege ordering: remembered ask grants may include high-risk commands.
+    const revokes = !!previous && ((previous.openSession && !update.openSession) || update.operationTier !== previous.operationTier)
     await this.change(profileId, () => !update.openSession && update.operationTier === 'none' ? undefined : ({
       profileId,
       openSession: update.openSession,

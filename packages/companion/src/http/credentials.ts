@@ -1,12 +1,14 @@
-import { constants, type Stats } from 'node:fs'
+import { validateApprovedCommandRules, type ApprovedCommandRule } from '@tabby-secure-mcp/ipc-contract/command-policy'
+import { constants, unlinkSync, type Stats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
-import type { ApprovalDuration, ClientConnectionGrant, ClientCredentialView, ClientIdentity, ClientPermission, CredentialStorePort } from './contracts.js'
+import type { ApprovalDuration, ClientCommandSet, CommandSetUpdate, DefaultCommandSet, ClientConnectionGrant, ClientFileTransferGrant, ClientCredentialView, ClientIdentity, ClientPermission, CredentialStorePort } from './contracts.js'
 
-export type CredentialFileSystem = Pick<typeof fs, 'mkdir' | 'lstat' | 'open' | 'rename' | 'unlink'>
-type Credential = ClientCredentialView & { token: string; connections: ClientConnectionGrant[] }
-type Snapshot = { records: Map<string, Credential>; version: string }
+export type CredentialFileSystem = Pick<typeof fs, 'mkdir' | 'lstat' | 'open' | 'rename' | 'unlink'> & { unlinkSync: typeof unlinkSync }
+type StoredCommandSet = CommandSetUpdate & { profileId: string; profileDigest: string }
+type Credential = ClientCredentialView & { token: string; connections: ClientConnectionGrant[]; commandSets: StoredCommandSet[]; fileTransfers: ClientFileTransferGrant[] }
+type Snapshot = { records: Map<string, Credential>; defaultCommands: ApprovedCommandRule[]; version: string }
 const MAX_BYTES = 64 * 1024
 const DAY = 86_400_000
 const TOKEN = /^[A-Za-z0-9_-]{43}$/
@@ -47,24 +49,52 @@ function validConnections(value: unknown): value is ClientConnectionGrant[] {
   })
 }
 
-function decode(bytes: Buffer): Map<string, Credential> {
+function commandSets(value: unknown): StoredCommandSet[] {
+  if (!Array.isArray(value)) throw error()
+  const ids = new Set<string>()
+  let count = 0
+  return value.map(set => {
+    if (!object(set, ['profileId', 'profileDigest', 'inheritDefaults', 'rules'])
+      || !validConnections([{ profileId: set.profileId, profileDigest: set.profileDigest, updatedAt: 0 }])
+      || ids.has(set.profileId as string) || typeof set.inheritDefaults !== 'boolean') throw error()
+    ids.add(set.profileId as string)
+    const rules = validateApprovedCommandRules(set.rules)
+    count += rules.length
+    if (count > 128) throw error()
+    return { profileId: set.profileId as string, profileDigest: set.profileDigest as string, inheritDefaults: set.inheritDefaults, rules }
+  })
+}
+
+function decode(bytes: Buffer): Omit<Snapshot, 'version'> {
   try {
     const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-    if (!object(value, ['version', 'credentials']) || (value.version !== 1 && value.version !== 2)
-      || !Array.isArray(value.credentials) || value.credentials.length > 32) throw error()
+    if (!value || typeof value !== 'object') throw error()
+    const v = (value as { version?: unknown }).version
+    if (!object(value, v === 3 || v === 4 ? ['version', 'credentials', 'defaultCommands'] : ['version', 'credentials'])
+      || (v !== 1 && v !== 2 && v !== 3 && v !== 4) || !Array.isArray(value.credentials) || value.credentials.length > 32) throw error()
+    const defaults = v === 3 || v === 4 ? validateApprovedCommandRules(value.defaultCommands) : []
+    if (defaults.length > 128) throw error()
     const records = new Map<string, Credential>(), tokens = new Set<string>()
     for (const record of value.credentials) {
-      if (!object(record, value.version === 1 ? ['id', 'name', 'generation', 'token', 'permission'] : ['id', 'name', 'generation', 'token', 'permission', 'connections'])
+      const keys = ['id', 'name', 'generation', 'token', 'permission']
+      if (v !== 1) keys.push('connections')
+      if (v === 3 || v === 4) keys.push('commandSets')
+      if (v === 4) keys.push('fileTransfers')
+      if (!object(record, keys)
         || typeof record.id !== 'string' || !ID.test(record.id) || records.has(record.id)
         || typeof record.name !== 'string' || nameOf(record.name) !== record.name
         || !timestamp(record.generation) || record.generation < 1
         || typeof record.token !== 'string' || !TOKEN.test(record.token)
         || Buffer.from(record.token, 'base64url').toString('base64url') !== record.token || tokens.has(record.token)
-        || !validPermission(record.permission) || (value.version === 2 && !validConnections(record.connections))) throw error()
-      records.set(record.id, { id: record.id, name: record.name, generation: record.generation, token: record.token, permission: record.permission, connections: value.version === 1 ? [] : record.connections as ClientConnectionGrant[] })
+        || !validPermission(record.permission) || (v !== 1 && !validConnections(record.connections))
+        || (v === 4 && !validConnections(record.fileTransfers))) throw error()
+      records.set(record.id, { id: record.id, name: record.name, generation: record.generation, token: record.token,
+        permission: record.permission, connections: v === 1 ? [] : record.connections as ClientConnectionGrant[],
+        commandSets: v === 3 || v === 4 ? commandSets(record.commandSets) : [],
+        fileTransfers: v === 4 ? record.fileTransfers as ClientFileTransferGrant[] : [] })
       tokens.add(record.token)
     }
-    return records
+    return { records, defaultCommands: defaults }
   } catch { throw error() } // JSON parser diagnostics may contain the bearer token.
 }
 
@@ -78,6 +108,13 @@ export class CredentialStore implements CredentialStorePort {
   private pendingWrite?: { before: string | null; after: string }
   private stale = false
   private records = new Map<string, Credential>()
+  private defaultCommands: ApprovedCommandRule[] = []
+  private commandVersion = 0
+  private pendingDefaults?: number
+  private readonly pendingCommandDigests = new Map<string, Map<string, string>>()
+  private readonly pendingCommandSets = new Map<string, Map<string, number>>()
+  private fileVersion = 0
+  private readonly pendingFileTransfers = new Map<string, Map<string, number>>()
   private queue: Promise<unknown> = Promise.resolve()
   private loaded = false
   private revision = 0
@@ -96,10 +133,10 @@ export class CredentialStore implements CredentialStorePort {
     this.filePath = path.resolve(filePath)
     this.pendingPath = `${this.filePath}.pending`
     this.now = options.now ?? Date.now
-    this.fs = { ...fs, ...options.fs }
+    this.fs = { ...fs, unlinkSync, ...options.fs }
   }
 
-  get hasUnpersistedRevocations(): boolean { return this.unpersisted.size > 0 || this.permissionUpdates.size > 0 || this.pendingConnections.size > 0 }
+  get hasUnpersistedRevocations(): boolean { return this.unpersisted.size > 0 || this.permissionUpdates.size > 0 || this.pendingConnections.size > 0 || this.pendingDefaults !== undefined || this.pendingCommandSets.size > 0 || this.pendingFileTransfers.size > 0 }
 
   load(): Promise<void> {
     return this.serial(async () => {
@@ -112,6 +149,7 @@ export class CredentialStore implements CredentialStorePort {
         const snapshot = await this.read(true)
         if (snapshot) {
           this.records = snapshot.records
+          this.defaultCommands = snapshot.defaultCommands
           this.committedVersion = snapshot.version
         }
         else await this.persist(new Map())
@@ -133,7 +171,7 @@ export class CredentialStore implements CredentialStorePort {
       const candidate = new Map(this.records)
       for (const [id, revision] of this.denied) if (this.permissionUpdates.get(id) !== revision) candidate.delete(id)
       if (candidate.size >= 32) throw new Error('Client credential limit reached')
-      const record: Credential = { id: randomUUID(), name, generation: 1, token: randomBytes(32).toString('base64url'), permission: none(), connections: [] }
+      const record: Credential = { id: randomUUID(), name, generation: 1, token: randomBytes(32).toString('base64url'), permission: none(), connections: [], commandSets: [], fileTransfers: [] }
       candidate.set(record.id, record)
       await this.persist(candidate)
       return { ...this.identity(record), permission: none() }
@@ -161,7 +199,7 @@ export class CredentialStore implements CredentialStorePort {
     return this.serial(async () => {
       if (this.denied.get(id) !== revision) throw new Error('Client credential changed')
       const candidate = new Map(this.records)
-      candidate.set(id, { ...record, generation: record.generation + 1, token: randomBytes(32).toString('base64url'), permission: none(), connections: [] })
+      candidate.set(id, { ...record, generation: record.generation + 1, token: randomBytes(32).toString('base64url'), permission: none(), connections: [], commandSets: [], fileTransfers: [] })
       await this.persist(candidate, { id, revision })
       if (this.denied.get(id) !== revision) throw new Error('Client credential changed')
       this.denied.delete(id)
@@ -247,14 +285,34 @@ export class CredentialStore implements CredentialStorePort {
     return this.connectionGrants(client).some(grant => grant.profileId === profileId && grant.profileDigest === profileDigest)
   }
 
-  setConnectionPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision?: number): Promise<void> {
+  setConnectionPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision?: number, stillCurrent?: () => boolean): Promise<void> {
+    client = { ...client }
     let revision: number
+    const valid = () => {
+      try { return this.connectionRevisions.get(client.id) === revision && this.isCurrent(client) && (!stillCurrent || stillCurrent()) }
+      catch { return false }
+    }
     const updatedAt = this.now()
     try {
       const current = this.connectionRevision(client)
-      if ((expectedRevision !== undefined && expectedRevision !== current)
+      if ((expectedRevision !== undefined && expectedRevision !== current) || (stillCurrent && !stillCurrent())
         || !validConnections([{ profileId, profileDigest: profileDigest ?? '0'.repeat(64), updatedAt }])) throw error()
       revision = ++this.revision
+      const old = this.records.get(client.id)!.connections.find(grant => grant.profileId === profileId)
+      const oldFile = this.records.get(client.id)!.fileTransfers.find(grant => grant.profileId === profileId)
+      if (profileDigest === null || (old && old.profileDigest !== profileDigest) || (oldFile && oldFile.profileDigest !== profileDigest)) {
+        const pending = this.pendingFileTransfers.get(client.id) ?? new Map<string, number>()
+        pending.set(profileId, ++this.fileVersion)
+        this.pendingFileTransfers.set(client.id, pending)
+      }
+      if (profileDigest === null || (old && old.profileDigest !== profileDigest)) {
+        const pending = this.pendingCommandSets.get(client.id) ?? new Map<string, number>()
+        pending.set(profileId, ++this.commandVersion)
+        this.pendingCommandSets.set(client.id, pending)
+        const digests = this.pendingCommandDigests.get(client.id) ?? new Map<string, string>()
+        digests.set(profileId, profileDigest ?? old?.profileDigest ?? '0'.repeat(64))
+        this.pendingCommandDigests.set(client.id, digests)
+      }
       this.connectionRevisions.set(client.id, revision)
       const pending = this.pendingConnections.get(client.id) ?? new Map<string, number>()
       pending.set(profileId, revision)
@@ -263,15 +321,144 @@ export class CredentialStore implements CredentialStorePort {
     } catch (e) { return Promise.reject(e) }
     return this.serial(async () => {
       const record = this.active(client.id, client.generation)
-      if (this.connectionRevisions.get(client.id) !== revision) throw error()
+      if (!valid()) throw error()
       const connections = record.connections.filter(grant => grant.profileId !== profileId)
       if (profileDigest !== null) connections.push({ profileId, profileDigest, updatedAt })
       const candidate = new Map(this.records)
       candidate.set(client.id, { ...record, connections })
-      await this.persist(candidate, undefined, { id: client.id, profileId, revision })
+      await this.persist(candidate, undefined, { id: client.id, profileId, revision, current: valid })
       this.active(client.id, client.generation)
       if (this.connectionRevisions.get(client.id) !== revision) throw error()
     })
+  }
+
+  fileTransferRevision(): number { return this.fileVersion }
+
+  hasFileTransferPermission(client: ClientIdentity, profileId: string, profileDigest: string): boolean {
+    if (!this.isCurrent(client) || this.pendingFileTransfers.get(client.id)?.has(profileId)
+      || this.pendingConnections.get(client.id)?.has(profileId)) return false
+    const record = this.records.get(client.id)!
+    const connection = record.connections.find(grant => grant.profileId === profileId)
+    if (connection && connection.profileDigest !== profileDigest) return false
+    return record.fileTransfers.some(grant => grant.profileId === profileId && grant.profileDigest === profileDigest)
+  }
+
+  setFileTransferPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision: number, stillCurrent?: () => boolean): Promise<void> {
+    const identity = { ...client }
+    let revision: number, connectionRevision: number
+    const updatedAt = this.now()
+    const current = () => {
+      try { return this.fileVersion === revision && this.isCurrent(identity)
+        && this.connectionRevision(identity) === connectionRevision && (!stillCurrent || stillCurrent()) }
+      catch { return false }
+    }
+    try {
+      const record = this.active(identity.id, identity.generation)
+      connectionRevision = this.connectionRevision(identity)
+      if (expectedRevision !== this.fileVersion || (stillCurrent && !stillCurrent())
+        || !validConnections([{ profileId, profileDigest: profileDigest ?? '0'.repeat(64), updatedAt }])) throw error()
+      const fileTransfers = record.fileTransfers.filter(grant => grant.profileId !== profileId)
+      if (profileDigest !== null) fileTransfers.push({ profileId, profileDigest, updatedAt })
+      const candidate = new Map(this.records)
+      candidate.set(identity.id, { ...record, fileTransfers })
+      this.checkCommandSize(candidate, this.defaultCommandSet().rules)
+      revision = ++this.fileVersion
+      const pending = this.pendingFileTransfers.get(identity.id) ?? new Map<string, number>()
+      pending.set(profileId, revision)
+      this.pendingFileTransfers.set(identity.id, pending)
+      this.notify()
+    } catch (e) { return Promise.reject(e) }
+    return this.serial(async () => {
+      if (!current()) throw error()
+      const record = this.active(identity.id, identity.generation)
+      const fileTransfers = record.fileTransfers.filter(grant => grant.profileId !== profileId)
+      if (profileDigest !== null) fileTransfers.push({ profileId, profileDigest, updatedAt })
+      const candidate = new Map(this.records)
+      candidate.set(identity.id, { ...record, fileTransfers })
+      await this.persist(candidate, undefined, undefined, undefined, { id: identity.id, profileId, revision, current })
+      if (!current()) throw error()
+    })
+  }
+
+  commandRevision(): number { return this.commandVersion }
+
+  defaultCommandSet(): DefaultCommandSet {
+    this.requireLoaded()
+    return { rules: structuredClone(this.pendingDefaults === undefined ? this.defaultCommands : []), revision: this.commandVersion }
+  }
+
+  commandSet(client: ClientIdentity, profileId: string, profileDigest: string): ClientCommandSet {
+    const record = this.active(client.id, client.generation)
+    if (!validConnections([{ profileId, profileDigest, updatedAt: 0 }])) throw error()
+    const local = record.commandSets.find(set => set.profileId === profileId)
+    const connection = record.connections.find(grant => grant.profileId === profileId)
+    const stale = !!((local && local.profileDigest !== profileDigest) || (connection && connection.profileDigest !== profileDigest))
+    const blocked = stale || this.pendingCommandSets.get(client.id)?.has(profileId)
+    const inheritDefaults = !blocked && (local?.inheritDefaults ?? true)
+    return { profileId, profileDigest, inheritDefaults, stale, revision: this.commandVersion,
+      rules: structuredClone(blocked ? [] : local?.rules ?? []),
+      defaultRules: inheritDefaults ? this.defaultCommandSet().rules : [] }
+  }
+
+  setDefaultCommandSet(rules: ApprovedCommandRule[], expectedRevision: number): Promise<void> {
+    let captured: ApprovedCommandRule[], revision: number
+    try {
+      this.requireLoaded()
+      if (expectedRevision !== this.commandVersion) throw error()
+      captured = structuredClone(validateApprovedCommandRules(rules))
+      if (captured.length > 128) throw error()
+      this.checkCommandSize(this.records, captured)
+      revision = ++this.commandVersion
+      this.pendingDefaults = revision
+      this.notify()
+    } catch (e) { return Promise.reject(e) }
+    return this.serial(async () => {
+      if (this.commandVersion !== revision) throw error()
+      await this.persist(new Map(this.records), undefined, undefined, { revision, defaults: captured, current: () => this.commandVersion === revision })
+      if (this.commandVersion !== revision) throw error()
+    })
+  }
+
+  setCommandSet(client: ClientIdentity, profileId: string, profileDigest: string, update: CommandSetUpdate, expectedRevision: number, stillCurrent?: () => boolean, beforeCommit?: () => Promise<void>): Promise<void> {
+    let captured: StoredCommandSet, revision: number
+    // Capture identity too: UI objects must not retarget a queued grant.
+    const identity = { ...client }
+    const current = () => {
+      try { return this.commandVersion === revision && this.isCurrent(identity) && (!stillCurrent || stillCurrent()) }
+      catch { return false }
+    }
+    try {
+      const record = this.active(identity.id, identity.generation)
+      if (expectedRevision !== this.commandVersion || (stillCurrent && !stillCurrent())
+        || !object(update, ['inheritDefaults', 'rules']) || typeof update.inheritDefaults !== 'boolean'
+        || !validConnections([{ profileId, profileDigest, updatedAt: 0 }])) throw error()
+      captured = { profileId, profileDigest, inheritDefaults: update.inheritDefaults, rules: structuredClone(validateApprovedCommandRules(update.rules)) }
+      const sets = commandSets([...record.commandSets.filter(set => set.profileId !== profileId), captured])
+      const candidate = new Map(this.records)
+      candidate.set(identity.id, { ...record, commandSets: sets })
+      this.checkCommandSize(candidate, this.defaultCommandSet().rules)
+      revision = ++this.commandVersion
+      const pending = this.pendingCommandSets.get(identity.id) ?? new Map<string, number>()
+      pending.set(profileId, revision)
+      this.pendingCommandSets.set(identity.id, pending)
+      const digests = this.pendingCommandDigests.get(identity.id) ?? new Map<string, string>()
+      digests.set(profileId, profileDigest)
+      this.pendingCommandDigests.set(identity.id, digests)
+      this.notify()
+    } catch (e) { return Promise.reject(e) }
+    return this.serial(async () => {
+      if (!current()) throw error()
+      const record = this.active(identity.id, identity.generation)
+      const candidate = new Map(this.records)
+      candidate.set(identity.id, { ...record, commandSets: commandSets([...record.commandSets.filter(set => set.profileId !== profileId), captured]) })
+      await this.persist(candidate, undefined, undefined, { revision, id: identity.id, profileId, current, beforeCommit })
+      // Request cancellation after the atomic commit is compensated by the caller using this owned revision.
+      if (this.commandVersion !== revision || !this.isCurrent(identity)) throw error()
+    })
+  }
+
+  private checkCommandSize(records: Map<string, Credential>, defaults: ApprovedCommandRule[]): void {
+    if (Buffer.byteLength(JSON.stringify({ version: 4, defaultCommands: defaults, credentials: [...records.values()] })) > MAX_BYTES) throw error()
   }
 
   authenticate(token: string): ClientIdentity | undefined {
@@ -350,6 +537,8 @@ export class CredentialStore implements CredentialStorePort {
   }
   private invalidate(id: string, permissionUpdate = false): number {
     const revision = ++this.revision
+    this.commandVersion++
+    this.fileVersion++
     this.denied.set(id, revision)
     this.unpersisted.set(id, revision)
     if (permissionUpdate) this.permissionUpdates.set(id, revision)
@@ -412,13 +601,13 @@ export class CredentialStore implements CredentialStorePort {
         size += bytesRead
       }
       if (size > MAX_BYTES) throw error()
-      const records = decode(bytes.subarray(0, size))
+      const snapshot = decode(bytes.subarray(0, size))
       if (committed) {
         await this.pendingStat()
         const current = await this.fileStat()
         if (current?.dev !== stat.dev || current?.ino !== stat.ino) throw error()
       }
-      return { records, version: createHash('sha256').update(bytes.subarray(0, size)).digest('hex') }
+      return { ...snapshot, version: createHash('sha256').update(bytes.subarray(0, size)).digest('hex') }
     } finally { await handle.close() }
   }
 
@@ -468,8 +657,12 @@ export class CredentialStore implements CredentialStorePort {
     this.pendingWrite = undefined
   }
 
-  private async persist(candidate: Map<string, Credential>, reset?: { id: string; revision: number }, connectionUpdate?: { id: string; profileId: string; revision: number }): Promise<void> {
+  private async persist(candidate: Map<string, Credential>, reset?: { id: string; revision: number }, connectionUpdate?: { id: string; profileId: string; revision: number; current?: () => boolean }, commandUpdate?: { revision: number; id?: string; profileId?: string; defaults?: ApprovedCommandRule[]; current?: () => boolean; beforeCommit?: () => Promise<void> }, fileUpdate?: { id: string; profileId: string; revision: number; current: () => boolean }): Promise<void> {
     if (this.stale) throw error()
+    const current = () => {
+      try { return (!commandUpdate?.current || commandUpdate.current()) && (!connectionUpdate?.current || connectionUpdate.current()) && (!fileUpdate || fileUpdate.current()) }
+      catch { return false }
+    }
     for (const [id, revision] of this.denied) {
       if (reset?.id === id && reset.revision === revision) continue
       const record = candidate.get(id)
@@ -484,7 +677,34 @@ export class CredentialStore implements CredentialStorePort {
       if (record) candidate.set(id, { ...record, connections: record.connections.filter(grant => !pending.has(grant.profileId)
         || (connectionUpdate?.id === id && connectionUpdate.profileId === grant.profileId && connectionUpdate.revision === pending.get(grant.profileId))) })
     }
-    const bytes = Buffer.from(JSON.stringify({ version: 2, credentials: [...candidate.values()] }))
+    const commandInvalidations = new Map([...this.pendingCommandSets].map(([id, pending]) => [id, new Map(pending)]))
+    for (const [id, pending] of commandInvalidations) {
+      const record = candidate.get(id)
+      if (record) candidate.set(id, { ...record, commandSets: record.commandSets.map(set => pending.has(set.profileId)
+        && !(commandUpdate?.id === id && commandUpdate.profileId === set.profileId && commandUpdate.revision === pending.get(set.profileId))
+        ? { ...set, inheritDefaults: false, rules: [] } : set) })
+    }
+    // Persist explicit empty sets too: an absent set would re-enable inherited defaults.
+    for (const [id, pending] of commandInvalidations) {
+      const record = candidate.get(id), committed = this.records.get(id)
+      if (!record || this.denied.has(id)) continue
+      for (const profileId of pending.keys()) {
+        if (!record.commandSets.some(set => set.profileId === profileId)) {
+          const old = committed?.commandSets.find(set => set.profileId === profileId)
+          const profileDigest = this.pendingCommandDigests.get(id)?.get(profileId) ?? old?.profileDigest
+          if (profileDigest) record.commandSets = [...record.commandSets, { profileId, profileDigest, inheritDefaults: false, rules: [] }]
+        }
+      }
+    }
+    const defaultsRevision = this.pendingDefaults
+    const fileInvalidations = new Map([...this.pendingFileTransfers].map(([id, pending]) => [id, new Map(pending)]))
+    for (const [id, pending] of fileInvalidations) {
+      const record = candidate.get(id)
+      if (record) candidate.set(id, { ...record, fileTransfers: record.fileTransfers.filter(grant => !pending.has(grant.profileId)
+        || (fileUpdate?.id === id && fileUpdate.profileId === grant.profileId && fileUpdate.revision === pending.get(grant.profileId))) })
+    }
+    const defaults = commandUpdate?.defaults ?? (defaultsRevision === undefined ? this.defaultCommands : [])
+    const bytes = Buffer.from(JSON.stringify({ version: 4, defaultCommands: defaults, credentials: [...candidate.values()] }))
     if (bytes.length > MAX_BYTES) throw error()
     const version = createHash('sha256').update(bytes).digest('hex')
     const temporary = path.join(path.dirname(this.filePath), `.credentials-${randomUUID()}.tmp`)
@@ -506,6 +726,7 @@ export class CredentialStore implements CredentialStorePort {
       const afterDirectory = await this.directory(), after = await this.fileStat()
       if (directory.dev !== afterDirectory.dev || directory.ino !== afterDirectory.ino
         || before?.dev !== after?.dev || before?.ino !== after?.ino) throw error()
+      if (!current()) throw error()
       await this.preparePending(directory)
       const currentVersion = (await this.read())?.version ?? null
       // Compare under the exclusive marker; an earlier check cannot protect sequential writers.
@@ -524,8 +745,15 @@ export class CredentialStore implements CredentialStorePort {
       await this.fs.rename(temporary, this.filePath)
       renamed = true
       await this.syncDirectory(directory)
-      // Commit last: no fallible filesystem operation follows marker removal.
-      await this.releasePending()
+      if (!current()) throw error()
+      // Request-scoped approval stays guarded while its operation runs; an aborted operation cannot publish it.
+      await commandUpdate?.beforeCommit?.()
+      await this.pendingStat()
+      if (!current()) throw error()
+      // This short synchronous commit cannot yield to cancellation after removing the only durable guard.
+      this.fs.unlinkSync(this.pendingPath)
+      this.pending = undefined
+      this.pendingWrite = undefined
     } catch {
       // Keep pending evidence; cleanup errors cannot turn the failed transaction into success.
       try { if (handle) await handle.close() } catch {}
@@ -535,6 +763,21 @@ export class CredentialStore implements CredentialStorePort {
     // A synchronous invalidation during the write survives this older transaction.
     this.committedVersion = version
     this.records = candidate
+    this.defaultCommands = defaults
+    for (const [id, pending] of fileInvalidations) {
+      const current = this.pendingFileTransfers.get(id)
+      for (const [profileId, revision] of pending) if (current?.get(profileId) === revision) current.delete(profileId)
+      if (!current?.size) this.pendingFileTransfers.delete(id)
+    }
+    if (this.pendingDefaults === defaultsRevision) this.pendingDefaults = undefined
+    for (const [id, pending] of commandInvalidations) {
+      const current = this.pendingCommandSets.get(id)
+      for (const [profileId, revision] of pending) if (current?.get(profileId) === revision) current.delete(profileId)
+      if (!current?.size) {
+        this.pendingCommandSets.delete(id)
+        this.pendingCommandDigests.delete(id)
+      }
+    }
     for (const [id, revision] of invalidations) {
       if (this.unpersisted.get(id) === revision) this.unpersisted.delete(id)
     }

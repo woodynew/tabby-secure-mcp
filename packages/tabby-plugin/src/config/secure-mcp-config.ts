@@ -99,7 +99,7 @@ export function writeAuthorizedSshProfileIdsToStore(
   return deduped
 }
 
-const TIER_VALUES = new Set(['none', 'readonly', 'readwrite', 'full'])
+const TIER_VALUES = new Set(['none', 'ask', 'auto_edit', 'full', 'readonly', 'readwrite'])
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
 
 function parsePermanentAuthorizations(store: unknown): StoredPermanentAuthorization[] {
@@ -116,7 +116,7 @@ function parsePermanentAuthorizations(store: unknown): StoredPermanentAuthorizat
     if (!item || typeof item !== 'object') {
       continue
     }
-    const record = item as Partial<StoredPermanentAuthorization>
+      const record = item as Partial<Omit<StoredPermanentAuthorization, 'operationTier'>> & { operationTier?: unknown }
     const profileId = typeof record.profileId === 'string' ? record.profileId.trim() : ''
     if (
       !profileId ||
@@ -135,7 +135,8 @@ function parsePermanentAuthorizations(store: unknown): StoredPermanentAuthorizat
     result.push({
       profileId,
       openSession: record.openSession,
-      operationTier: record.operationTier as GrantedOperationTier,
+        operationTier: (record.operationTier === 'readonly' || record.operationTier === 'readwrite'
+          ? 'ask' : record.operationTier) as GrantedOperationTier,
       profileDigest: record.profileDigest,
       updatedAt: record.updatedAt,
     })
@@ -296,10 +297,9 @@ export async function persistAuthorizedSshProfileIds(config: Pick<ConfigService,
 
 export async function persistPermanentAuthorizations(config: Pick<ConfigService, 'store' | 'save'>, grants: readonly StoredPermanentAuthorization[]): Promise<StoredPermanentAuthorization[]> {
   const previous = readPermanentAuthorizations(config.store, config)
-  const rank = { none: 0, readonly: 1, readwrite: 2, full: 3 }
   const revoked = previous.filter(old => {
     const next = grants.find(grant => grant.profileId === old.profileId)
-    return !next || (old.openSession && !next.openSession) || rank[next.operationTier] < rank[old.operationTier]
+    return !next || (old.openSession && !next.openSession) || next.operationTier !== old.operationTier
   }).map(grant => grant.profileId)
   return (await updateSecureMcpConfig(config, current => ({ ids: current.ids, grants: [...grants] }), [...previous, ...grants].map(grant => grant.profileId), revoked)).grants
 }

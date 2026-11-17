@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.json",
+  "angularCompilerOptions": { "strictTemplates": true },
+  "files": ["settings-template.module.ts"],
+  "include": []
+}

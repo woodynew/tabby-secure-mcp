@@ -623,7 +623,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
     const controller = new AbortController()
@@ -672,7 +672,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readwrite',
+      operationTier: 'ask',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
 
@@ -682,10 +682,10 @@ describe('ApprovalGatekeeper', () => {
       ok: true,
       profileRef,
       openSession: true,
-      operationTier: 'readwrite',
+      operationTier: 'ask',
     })
     if (described.ok) {
-      expect(described.policy.map(entry => entry.tier)).toEqual(['readonly', 'readwrite', 'full'])
+      expect(described.policy.map(entry => entry.mode)).toEqual(['ask', 'auto_edit', 'full'])
     }
     expect(harness.presenter.openCalls).toEqual([])
     expect(
@@ -702,7 +702,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
     const commandTab = fakeCommandTab()
@@ -736,7 +736,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
 
@@ -757,7 +757,7 @@ describe('ApprovalGatekeeper', () => {
         command: 'ls | head',
         deadlineMonotonicMs: harness.clock.now() + 45_000,
       }),
-    ).toEqual({ ok: false, code: 'not_approved' })
+    ).toEqual({ ok: false, code: 'unsupported_command' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
 
     const staleMemory = new FakeAuthorizationMemory()
@@ -774,7 +774,7 @@ describe('ApprovalGatekeeper', () => {
         command: 'ls',
         deadlineMonotonicMs: harness.clock.now() + 45_000,
       }),
-    ).toEqual({ ok: false, code: 'not_approved' })
+    ).toEqual({ ok: false, code: 'command_disabled' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
   })
 })
@@ -873,7 +873,7 @@ function gatekeeperWithMemory(
 async function commandCloseHarness(
   policy: () => CommandSessionClosePolicy,
   options: Parameters<typeof fakeCommandTab>[0] = {},
-  operationTier: 'readonly' | 'full' = 'readonly',
+  operationTier: 'auto_edit' | 'full' = 'auto_edit',
 ) {
   const harness = createHarness()
   const memory = new FakeAuthorizationMemory()
@@ -892,11 +892,11 @@ async function commandCloseHarness(
 
 describe('command session close policy', () => {
   it.each(['ls', 'false'])('closes only the completed command session for %s', async command => {
-    const harness = await commandCloseHarness(() => 'after-completion', {}, command === 'false' ? 'full' : 'readonly')
+    const harness = await commandCloseHarness(() => 'after-completion', {}, command === 'false' ? 'full' : 'auto_edit')
     const otherTab = fakeCommandTab()
     const result = await harness.gatekeeper.runAuthorizedSshCommand({ ...harness.request, command })
     expect(result).toEqual({
-      ok: true, commandClass: command === 'false' ? 'full_control' : 'read_only', output: 'files\n', truncated: false,
+      ok: true, commandClass: command === 'false' ? 'full_control' : 'read_only', commandRisk: command === 'false' ? 'unknown' : 'low', output: 'files\n', truncated: false,
     })
     expect(harness.commandTab.tab.destroy).toHaveBeenCalledOnce()
     expect(harness.commandTab.subscriptions.active).toBe(0)

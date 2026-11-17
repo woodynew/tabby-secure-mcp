@@ -110,7 +110,7 @@ describe('secure MCP config helpers', () => {
     const grant: StoredPermanentAuthorization = {
       profileId: 'ssh-profile-1',
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
       profileDigest: 'a'.repeat(64),
       updatedAt: '2026-10-19T00:00:00.000Z',
     }

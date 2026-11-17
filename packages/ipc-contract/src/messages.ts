@@ -68,12 +68,16 @@ const boundedString = z
     message: `string exceeds ${MAX_STRING_BYTES} bytes`,
   })
 const identifier = boundedString.min(1).max(MAX_IDENTIFIER_CODE_UNITS)
+const filePath = boundedString.min(1).max(4096).regex(/^[^\u0000-\u001f\u007f-\u009f\u2028\u2029]+$/)
 const sequence = z.number().int().positive()
 const leaseEpoch = z.number().int().positive()
 
 export const errorCodeSchema = z.enum([
   'target_unavailable',
   'not_approved',
+  'command_disabled',
+  'unsupported_command',
+  'approval_unavailable',
   'expired',
   'cancelled',
   'busy',
@@ -82,6 +86,11 @@ export const errorCodeSchema = z.enum([
   'internal',
   'audit_unavailable',
   'outcome_unknown',
+  'file_transfer_disabled',
+  'file_transfer_failed',
+  'file_exists',
+  'file_too_large',
+  'invalid_path',
 ])
 export type ErrorCode = z.infer<typeof errorCodeSchema>
 
@@ -97,6 +106,13 @@ export const openAuthorizedSshProfileRequestSchema = z.strictObject({
   }),
 })
 
+export const closeMcpSshTabRequestSchema = z.strictObject({
+  method: z.literal('close_mcp_ssh_tab'),
+  params: z.strictObject({
+    tab_ref: identifier,
+  }),
+})
+
 export const getSshOperationAuthorizationRequestSchema = z.strictObject({
   method: z.literal('get_ssh_operation_authorization'),
   params: z.strictObject({
@@ -109,15 +125,39 @@ export const runAuthorizedSshCommandRequestSchema = z.strictObject({
   params: z.strictObject({
     profile_ref: identifier,
     command: boundedString.min(1).max(512),
+    tab_ref: identifier.optional(),
+    new_tab: z.boolean().optional(),
+  }).refine(params => !(params.tab_ref !== undefined && params.new_tab === true), {
+    message: 'tab_ref cannot be combined with new_tab: true.',
+    path: ['new_tab'],
   }),
+})
+
+export const fileTransferParamsSchema = z.strictObject({
+  profile_ref: identifier,
+  local_path: filePath,
+  remote_path: filePath,
+})
+
+export const uploadSshFileRequestSchema = z.strictObject({
+  method: z.literal('upload_ssh_file'),
+  params: fileTransferParamsSchema,
+})
+
+export const downloadSshFileRequestSchema = z.strictObject({
+  method: z.literal('download_ssh_file'),
+  params: fileTransferParamsSchema,
 })
 
 export const operationalRequestSchema = secureSchema(
   z.discriminatedUnion('method', [
     listAuthorizedSshProfilesRequestSchema,
     openAuthorizedSshProfileRequestSchema,
+    closeMcpSshTabRequestSchema,
     getSshOperationAuthorizationRequestSchema,
     runAuthorizedSshCommandRequestSchema,
+    uploadSshFileRequestSchema,
+    downloadSshFileRequestSchema,
   ]),
 )
 export type OperationalRequest = z.infer<typeof operationalRequestSchema>
@@ -206,25 +246,29 @@ export const listProfilesRpcResultSchema = z.strictObject({
 
 export const openProfileRpcResultSchema = z.strictObject({
   status: z.literal('opened'),
+  tab_ref: identifier.optional(),
+  tab_reusable: z.boolean().optional(),
 })
 
-export const operationTierSchema = z.enum(['none', 'readonly', 'readwrite', 'full'])
+export const closeMcpSshTabRpcResultSchema = z.strictObject({
+  status: z.literal('closed'),
+})
+
+export const operationTierSchema = z.enum(['none', 'ask', 'auto_edit', 'full'])
 
 export const sshCommandClassSchema = z.enum(['read_only', 'read_write', 'full_control'])
 
 export const operationAuthorizationRpcResultSchema = z.strictObject({
   profile_ref: identifier,
   open_session: z.boolean(),
-  operation_tier: operationTierSchema,
+  approval_mode: operationTierSchema,
   authorizes: z.literal('ssh_command'),
   policy: z
     .array(
       z.strictObject({
-        tier: z.enum(['readonly', 'readwrite', 'full']),
-        rank: z.number().int().min(1).max(3),
+        mode: z.enum(['ask', 'auto_edit', 'full']),
         label: boundedString.min(1).max(64),
-        subject: z.literal('ssh_command'),
-        effect: sshCommandClassSchema,
+        auto_approve: z.enum(['none', 'low_risk', 'all']),
       }),
     )
     .max(3),
@@ -232,16 +276,28 @@ export const operationAuthorizationRpcResultSchema = z.strictObject({
 
 export const sshCommandRpcResultSchema = z.strictObject({
   status: z.enum(['completed', 'truncated']),
-  command_class: sshCommandClassSchema,
+  command_risk: z.enum(['low', 'high', 'unknown']),
   output: boundedString.max(4096),
   truncated: z.boolean(),
+  tab_ref: identifier.optional(),
+  tab_reusable: z.boolean().optional(),
+  reused_tab: z.boolean().optional(),
+})
+
+export const fileTransferRpcResultSchema = z.strictObject({
+  status: z.enum(['uploaded', 'downloaded']),
+  bytes_transferred: z.number().int().nonnegative(),
+  tab_ref: identifier.optional(),
+  tab_reusable: z.boolean().optional(),
 })
 
 export const rpcSuccessResultSchema = z.union([
   listProfilesRpcResultSchema,
   openProfileRpcResultSchema,
+  closeMcpSshTabRpcResultSchema,
   operationAuthorizationRpcResultSchema,
   sshCommandRpcResultSchema,
+  fileTransferRpcResultSchema,
 ])
 
 const rpcSuccessSchema = z.strictObject({

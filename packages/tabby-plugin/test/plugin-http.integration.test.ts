@@ -9,7 +9,7 @@ import { expect, it, vi } from 'vitest'
 import { PluginHttpRuntime } from '../src/runtime/plugin-http-runtime'
 import { RuntimeLeaseState } from '../src/runtime/runtime-lease-state'
 
-it('serves four tools through the plugin and restores only the named permanent client after restart', async () => {
+it('serves five tools through the plugin and restores only the named permanent client after restart', async () => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'tabby-http-integration-')))
   const reservation = createServer()
   await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
@@ -17,11 +17,12 @@ it('serves four tools through the plugin and restores only the named permanent c
   await new Promise<void>(resolve => reservation.close(() => resolve()))
   const config = { store: { secureMcp: { http: { enabled: true, port } } }, save: async () => {} }
   const audit = { append: vi.fn(async () => {}), safeAppend: vi.fn(async () => {}) }
+  const ownedTab = { destroy: vi.fn() }
   const gate = {
     approvalBusy: false,
-    requestOpen: vi.fn(async () => ({ ok: true, status: 'opened' })),
-    describeOperationAuthorization: async () => ({ ok: true, profileRef: 'ref', openSession: false, operationTier: 'readonly', policy: [] }),
-    runAuthorizedSshCommand: vi.fn(async () => ({ ok: true, commandClass: 'read_only', output: 'test\n', truncated: false })),
+    requestOpen: vi.fn(async (request: any) => { request.onRetainedTab?.(ownedTab); return { ok: true, status: 'opened' } }),
+    describeOperationAuthorization: async () => ({ ok: true, profileRef: 'ref', openSession: false, operationTier: 'auto_edit', policy: [] }),
+    runAuthorizedSshCommand: vi.fn(async () => ({ ok: true, commandClass: 'read_only', commandRisk: 'low', output: 'test\n', truncated: false })),
   }
   const profiles = { listAuthorizedProfiles: async () => [{ profile_ref: 'ref', display_name: 'QA' }], clearRefCache() {} }
   const presenter = { presentClient: vi.fn(async () => 'permanent') }
@@ -45,12 +46,20 @@ it('serves four tools through the plugin and restores only the named permanent c
     }
     await connect()
     expect(presenter.presentClient.mock.calls[0]![0]).toMatchObject({ clientIdentity: 'My named AI client' })
+    let tabRef: string | undefined
     for (const [name, args] of [
       ['list_authorized_ssh_profiles', {}],
       ['get_ssh_operation_authorization', { profile_ref: 'ref' }],
       ['open_authorized_ssh_profile', { profile_ref: 'ref' }],
       ['run_authorized_ssh_command', { profile_ref: 'ref', command: 'whoami' }],
-    ] as const) expect((await client!.callTool({ name, arguments: args })).isError).toBeFalsy()
+    ] as const) {
+      const result = await client!.callTool({ name, arguments: args })
+      expect(result.isError).toBeFalsy()
+      if (name === 'open_authorized_ssh_profile') tabRef = (result.structuredContent as any).tab_ref
+    }
+    expect(tabRef).toEqual(expect.any(String))
+    expect((await client!.callTool({ name: 'close_mcp_ssh_tab', arguments: { tab_ref: tabRef } })).structuredContent).toEqual({ status: 'closed' })
+    expect(ownedTab.destroy).toHaveBeenCalledOnce()
     expect(gate.requestOpen).toHaveBeenCalledOnce()
     expect(gate.runAuthorizedSshCommand).toHaveBeenCalledOnce()
     await client!.close()

@@ -192,6 +192,9 @@ export class AuditService {
         errorCode: event.error_code as AuditEventInput['errorCode'],
         requestId: event.request_id,
         authorizedCount: event.authorized_count,
+        approvalMode: event.approval_mode,
+        commandRisk: event.command_risk,
+        commandRuleId: event.command_rule_id,
         previousHash: event.previous_hash,
       })
       const { hash } = hashAuditEvent(payload, event.previous_hash)
@@ -218,6 +221,9 @@ export class AuditService {
       errorCode: input.errorCode,
       requestId: input.requestId,
       authorizedCount: input.authorizedCount,
+      approvalMode: input.approvalMode,
+      commandRisk: input.commandRisk,
+      commandRuleId: input.commandRuleId,
       previousHash: this.previousHash,
     })
     const { hash, previous_hash } = hashAuditEvent(payload, this.previousHash)
@@ -239,6 +245,9 @@ export class AuditService {
     if (input.authorizedCount !== undefined) {
       stored.authorized_count = input.authorizedCount
     }
+    if (input.approvalMode !== undefined) stored.approval_mode = input.approvalMode
+    if (input.commandRisk !== undefined) stored.command_risk = input.commandRisk
+    if (input.commandRuleId !== undefined) stored.command_rule_id = input.commandRuleId
 
     const line = `${JSON.stringify(stored)}\n`
     const bytes = Buffer.byteLength(line, 'utf8')
@@ -290,7 +299,8 @@ export async function verifyAuditSegments(paths: readonly string[], fs: AuditFil
       try { event = JSON.parse(line) } catch { throw new Error('corrupt audit record') }
       const payload = canonicalAuditPayload({ version: event.version, sequence: event.sequence, timestampUtc: event.timestamp_utc,
         event: event.event, result: event.result, errorCode: event.error_code as AuditEventInput['errorCode'],
-        requestId: event.request_id, authorizedCount: event.authorized_count, previousHash: event.previous_hash })
+        requestId: event.request_id, authorizedCount: event.authorized_count,
+        approvalMode: event.approval_mode, commandRisk: event.command_risk, commandRuleId: event.command_rule_id, previousHash: event.previous_hash })
       if (event.version !== AUDIT_LOG_VERSION || event.sequence !== sequence + 1 || event.previous_hash !== previousHash || hashAuditEvent(payload, previousHash).hash !== event.hash) throw new Error('broken audit chain')
       sequence = event.sequence
       previousHash = event.hash

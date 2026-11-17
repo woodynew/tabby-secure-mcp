@@ -74,7 +74,7 @@ describe('authorization security regressions', () => {
     const f = fixture()
     const effective = f.profiles.getConfigProxyForProfile(profile)
     const digest = stableProfileDigest(effective)
-    await f.memory.setManagedGrant('p', effective, { openSession: true, operationTier: 'readonly' })
+    await f.memory.setManagedGrant('p', effective, { openSession: true, operationTier: 'auto_edit' })
     let rejectSave!: (reason: Error) => void
     f.config.save.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectSave = reject }))
     const increase = f.memory.setManagedGrant('p', effective, { openSession: true, operationTier: 'full' })

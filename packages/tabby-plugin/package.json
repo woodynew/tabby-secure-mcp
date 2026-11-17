@@ -19,6 +19,7 @@
     "pretest": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.mts --root .",
+    "test:templates": "ngc -p test/tsconfig.settings-template.json",
     "test:integration": "vitest run --config ../../vitest.integration.config.mts --root .",
     "pack:check": "npm pack --dry-run"
   },

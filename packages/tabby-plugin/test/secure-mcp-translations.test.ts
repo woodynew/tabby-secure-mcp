@@ -159,6 +159,21 @@ describe('Secure MCP host translation registration', () => {
 })
 
 describe('Secure MCP bilingual UI catalogs', () => {
+  it.each([
+    ['en-US', 'Enable file transfer', ['Disabled by default', 'Tabby machine', 'absolute paths', 'not overwritten']],
+    ['zh-CN', '启用文件传输', ['默认关闭', 'Tabby 所在机器', '绝对路径', '不覆盖']],
+  ] as const)('renders the file transfer scope and notices in %s', (locale, label, scopeTerms) => {
+    const { translate } = createHostTranslator()
+    translate.setTranslation(locale, translationsForLocale(locale))
+    translate.setDefaultLang(locale)
+    expect(translate.instant('secureMcp.enableFileTransfer')).toBe(label)
+    const help = translate.instant('secureMcp.fileTransferHelp')
+    for (const term of scopeTerms) expect(help).toContain(term)
+    for (const key of ['fileTransferEnabledNotice', 'fileTransferDisabledNotice', 'errorSaveFileTransfer']) {
+      expect(translate.instant('secureMcp.' + key)).not.toBe('secureMcp.' + key)
+    }
+  })
+
   it('has complete matching keys and interpolation parameters', () => {
     expect(Object.keys(SECURE_MCP_ZH_CN).sort()).toEqual(Object.keys(SECURE_MCP_EN).sort())
     for (const key of Object.keys(SECURE_MCP_EN) as Array<keyof typeof SECURE_MCP_EN>) {

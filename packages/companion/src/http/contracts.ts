@@ -1,3 +1,5 @@
+import type { ApprovedCommandRule } from '@tabby-secure-mcp/ipc-contract/command-policy'
+export type { ApprovedCommandRule } from '@tabby-secure-mcp/ipc-contract/command-policy'
 import type { ErrorCode, OperationalRequest } from '@tabby-secure-mcp/ipc-contract'
 
 export type ApprovalDuration = 'session' | '24h' | 'permanent'
@@ -10,13 +12,44 @@ export type ClientPermission =
   | { kind: 'permanent'; approvedAt: number }
 export interface ClientCredentialView extends ClientIdentity { permission: ClientPermission }
 export interface ClientConnectionGrant { profileId: string; profileDigest: string; updatedAt: number }
-export interface ClientConnectionPermissions {
+export interface ClientFileTransferGrant { profileId: string; profileDigest: string; updatedAt: number }
+export interface FileTransferPermissions {
+  fileTransferRevision(): number
+  hasFileTransferPermission(client: ClientIdentity, profileId: string, profileDigest: string): boolean
+  setFileTransferPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision: number, stillCurrent?: () => boolean): Promise<void>
+}
+export interface DefaultCommandSet { rules: ApprovedCommandRule[]; revision: number }
+export interface ClientCommandSet extends DefaultCommandSet {
+  profileId: string
+  profileDigest: string
+  inheritDefaults: boolean
+  defaultRules: ApprovedCommandRule[]
+  stale: boolean
+}
+export interface CommandSetUpdate { inheritDefaults: boolean; rules: ApprovedCommandRule[] }
+export interface CommandPermissions {
+  commandRevision(): number
+  defaultCommandSet(): DefaultCommandSet
+  commandSet(client: ClientIdentity, profileId: string, profileDigest: string): ClientCommandSet
+  setDefaultCommandSet(rules: ApprovedCommandRule[], expectedRevision: number): Promise<void>
+  /** beforeCommit runs under the queued, durable guard; it must not enqueue writes to this store. */
+  setCommandSet(client: ClientIdentity, profileId: string, profileDigest: string, update: CommandSetUpdate, expectedRevision: number, stillCurrent?: () => boolean, beforeCommit?: () => Promise<void>): Promise<void>
+}
+export interface ClientConnectionPermissions extends Partial<CommandPermissions>, Partial<FileTransferPermissions> {
   connectionGrants(client: ClientIdentity): ClientConnectionGrant[]
   connectionRevision(client: ClientIdentity): number
   hasConnectionPermission(client: ClientIdentity, profileId: string, profileDigest: string): boolean
-  setConnectionPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision?: number): Promise<void>
+  setConnectionPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision?: number, stillCurrent?: () => boolean): Promise<void>
 }
-export interface CredentialStorePort extends ClientConnectionPermissions {
+export interface CredentialStorePort extends ClientConnectionPermissions, FileTransferPermissions {
+  fileTransferRevision(): number
+  hasFileTransferPermission(client: ClientIdentity, profileId: string, profileDigest: string): boolean
+  setFileTransferPermission(client: ClientIdentity, profileId: string, profileDigest: string | null, expectedRevision: number, stillCurrent?: () => boolean): Promise<void>
+  commandRevision(): number
+  defaultCommandSet(): DefaultCommandSet
+  commandSet(client: ClientIdentity, profileId: string, profileDigest: string): ClientCommandSet
+  setDefaultCommandSet(rules: ApprovedCommandRule[], expectedRevision: number): Promise<void>
+  setCommandSet(client: ClientIdentity, profileId: string, profileDigest: string, update: CommandSetUpdate, expectedRevision: number, stillCurrent?: () => boolean, beforeCommit?: () => Promise<void>): Promise<void>
   load(): Promise<void>
   list(): ClientCredentialView[]
   create(name: string): Promise<ClientCredentialView>
