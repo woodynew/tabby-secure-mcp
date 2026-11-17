@@ -1,68 +1,123 @@
 export const secureMcpSettingsTemplate = `
-    <h3>Authorized SSH profiles</h3>
-    <p class="text-muted">
-      Select which non-built-in SSH profiles MCP may use. Credentials, hostnames, usernames, groups,
-      and profile options are never exposed outside Tabby. Output from an existing tab is not read.
-    </p>
-    <p class="text-muted">
-      Allowing an open remembers it until you revoke it here. Operation tiers authorize SSH commands
-      and are managed only in Tabby. Low authorizes read-only SSH commands, medium authorizes
-      read-write SSH commands, and high authorizes full-control SSH commands. A higher tier includes
-      every lower command class. A command whose class fits the tier runs once in a new visible tab.
-      Shell operators are rejected, and the returned text is capped. The MCP client cannot raise its own tier.
-    </p>
-
-    <div *ngIf="loading">Loading SSH profiles…</div>
-    <div *ngIf="error" class="alert alert-danger" role="alert">{{ error }}</div>
-
-    <div *ngIf="!loading">
-      <div *ngIf="rows.length === 0" class="text-muted">No eligible SSH profiles found.</div>
-      <div *ngFor="let row of rows" class="mb-3">
-        <label class="d-block">
-          <input
-            type="checkbox"
-            [checked]="row.selected"
-            [disabled]="saving"
-            (change)="onToggle(row, $any($event.target).checked)"
-          />
-          {{ row.displayName }}
-        </label>
-        <div *ngIf="row.selected" class="ms-4">
-          <label>
-            Operation tier
-            <select
-              [disabled]="saving"
-              (change)="onTierChange(row, $any($event.target).value)"
-            >
-              <option
-                *ngFor="let option of tierOptions"
-                [value]="option.value"
-                [selected]="option.value === row.operationTier"
-              >{{ option.label }}</option>
-            </select>
-          </label>
-          <p *ngIf="row.grantStale" class="text-warning mb-1">
-            This profile changed after the grant was saved. Save the grant again to restore it.
-          </p>
-          <button
-            *ngIf="row.grantStale"
-            type="button"
-            class="btn btn-sm btn-outline-warning me-2"
-            [disabled]="saving"
-            (click)="onRefreshGrant(row)"
-          >
-            Save grant again
-          </button>
-          <button
-            *ngIf="row.openSession"
-            type="button"
-            class="btn btn-sm btn-outline-secondary"
-            [disabled]="saving"
-            (click)="onRevokeOpen(row)"
-          >
-            Revoke remembered open
-          </button>
+<div class="secure-mcp-settings">
+  <header class="workspace-header">
+    <div><h2>{{ 'secureMcp.settingsTitle' | translate }}</h2><p class="muted" *ngIf="!commandEditor">{{ 'secureMcp.settingsIntro' | translate }}</p></div>
+    <span *ngIf="runtime" class="status-pill">{{ (serviceStatuses[runtime.status] || 'secureMcp.serviceError') | translate }}</span>
+  </header>
+  <p *ngIf="!canManage" class="alert alert-info">{{ 'secureMcp.mainWindowOnly' | translate }}</p>
+  <div *ngIf="runtime?.error" class="alert alert-danger" role="alert">{{ (serviceErrors[runtime!.error!] || runtime!.error) | translate }}</div>
+  <div *ngIf="runtime?.credentials?.hasUnpersistedRevocations" class="alert alert-danger" role="alert">{{ 'secureMcp.clientRevocationsPending' | translate }}</div>
+  <div *ngIf="error" class="alert alert-danger" role="alert">{{ error | translate }}</div>
+  <div *ngIf="notice" class="alert alert-info" role="status">{{ notice | translate }}</div>
+  <nav class="section-tabs" [attr.aria-label]="'secureMcp.settingsSections' | translate">
+    <button type="button" class="btn btn-link" [class.active]="section === 'service'" [attr.aria-current]="section === 'service' ? 'page' : null" [disabled]="saving" (click)="onSectionChange('service')">{{ 'secureMcp.sectionService' | translate }}</button>
+    <button type="button" class="btn btn-link" [class.active]="section === 'clients'" [attr.aria-current]="section === 'clients' ? 'page' : null" [disabled]="saving" (click)="onSectionChange('clients')">{{ 'secureMcp.sectionClients' | translate }}<span class="count">{{ clients.length }}</span></button>
+    <button type="button" class="btn btn-link" [class.active]="section === 'ssh'" [attr.aria-current]="section === 'ssh' ? 'page' : null" [disabled]="saving" (click)="onSectionChange('ssh')">{{ 'secureMcp.sectionSsh' | translate }}</button>
+    <button type="button" class="btn btn-link" [class.active]="section === 'global'" [attr.aria-current]="section === 'global' ? 'page' : null" [disabled]="saving" (click)="onSectionChange('global')">{{ 'secureMcp.sectionGlobal' | translate }}<span class="count">{{ defaultCommandRules.length }}</span></button>
+  </nav>
+  <div class="content" *ngIf="!commandEditor">
+    <section *ngIf="section === 'service'">
+      <div class="page-heading"><div><h2>{{ 'secureMcp.localService' | translate }}</h2><p class="muted">{{ 'secureMcp.serviceIntro' | translate }}</p></div></div>
+      <section class="panel" *ngIf="runtime">
+        <div class="panel-head"><h3>{{ 'secureMcp.status' | translate }}</h3><span class="status-pill">{{ (serviceStatuses[runtime.status] || 'secureMcp.serviceError') | translate }}</span></div>
+        <div class="panel-body">
+          <label for="mcp-port">{{ 'secureMcp.port' | translate }}</label>
+          <div class="actions"><input id="mcp-port" class="port-input" type="number" min="1024" max="65535" [value]="httpPort" [disabled]="!canManage || saving" (input)="httpPort = +$any($event.target).value" />
+          <button type="button" class="btn btn-primary" [disabled]="!canManage || saving" (click)="onSaveServer(true)">{{ 'secureMcp.enableService' | translate }}</button>
+          <button type="button" class="btn btn-outline-secondary" [disabled]="!canManage || saving" (click)="onSaveServer(false)">{{ 'secureMcp.disableService' | translate }}</button></div>
+        </div>
+      </section>
+      <section class="panel"><div class="panel-head"><h3>{{ 'secureMcp.commandSessions' | translate }}</h3></div><div class="panel-body">
+        <label for="command-session-close-policy">{{ 'secureMcp.afterCommand' | translate }}</label>
+        <select id="command-session-close-policy" [value]="commandSessionClosePolicy" [disabled]="!canManage || saving || loading" (change)="onClosePolicyChange($any($event.target).value, $any($event.target))">
+          <option value="keep">{{ 'secureMcp.keepSession' | translate }}</option><option value="after-completion">{{ 'secureMcp.closeWhenFinished' | translate }}</option>
+        </select><p class="muted">{{ 'secureMcp.commandSessionsHelp' | translate }}</p>
+      </div></section>
+      <section *ngIf="runtime && runtime.sessions().length" class="panel"><div class="panel-head"><h3>{{ 'secureMcp.activeSessions' | translate }}</h3></div><div class="panel-body">
+        <p *ngFor="let session of runtime.sessions()">{{ session.clientName }}<span class="badge">{{ (session.state === 'approved' ? 'secureMcp.sessionApproved' : 'secureMcp.sessionPending') | translate }}</span><span class="muted">{{ (session.duration === 'permanent' ? 'secureMcp.permanentPermission' : 'secureMcp.sessionOnly') | translate }}</span></p>
+      </div></section>
+    </section>
+    <section *ngIf="section === 'clients'">
+      <div class="page-heading"><div><h2>{{ 'secureMcp.sectionClients' | translate }}</h2><p class="muted">{{ 'secureMcp.clientsIntro' | translate }}</p></div><button type="button" class="btn btn-outline-primary" [disabled]="!canManage || saving || !runtime" (click)="creatingClient = !creatingClient">{{ 'secureMcp.addClient' | translate }}</button></div>
+      <form *ngIf="creatingClient || clients.length === 0" class="create-client" (submit)="$event.preventDefault(); onCreateClient()">
+        <label for="new-client-name">{{ 'secureMcp.credentialName' | translate }}<input id="new-client-name" type="text" maxlength="80" [value]="clientName" [disabled]="!canManage || saving || !runtime" (input)="clientName = $any($event.target).value" /></label>
+        <button type="submit" class="btn btn-primary" [disabled]="!canManage || saving || !runtime || !clientName.trim()">{{ 'secureMcp.addClient' | translate }}</button>
+      </form>
+      <p *ngIf="clients.length === 0" class="empty-state muted">{{ 'secureMcp.noClients' | translate }}</p>
+      <div class="client-layout" *ngFor="let client of selectedClientView; trackBy: trackClient">
+        <div class="client-sidebar"><div class="list-label">{{ 'secureMcp.pairedClients' | translate }}</div><button type="button" *ngFor="let item of clients; trackBy: trackClient" class="btn client-choice" [class.active]="item.id === client.id" [attr.aria-pressed]="item.id === client.id" [disabled]="saving" (click)="onSelectClient(item.id)">{{ item.name }}</button></div>
+        <div class="client-details">
+          <div class="client-title"><h2>{{ client.name }}</h2><details><summary>{{ 'secureMcp.renameClient' | translate }}</summary><label>{{ 'secureMcp.credentialName' | translate }}<input type="text" maxlength="80" [value]="client.name" [disabled]="!canManage || saving" (change)="onRenameClient(client.id, $any($event.target).value, $any($event.target))" /></label></details></div>
+          <section class="panel"><div class="panel-body setting-row"><div><h3>{{ 'secureMcp.pairingAuthorization' | translate }}</h3><p class="muted">{{ clientPermission(client) | translate:{ expiresAt: $any(client.permission).expiresAt | date:'medium' } }}</p></div><div class="actions">
+            <label class="sr-only" for="client-permission">{{ 'secureMcp.pairingAuthorization' | translate }}</label><select id="client-permission" #permissionChoice [value]="clientPermissionChoice(client)" [disabled]="!canManage || saving"><option value="session">{{ 'secureMcp.nextSession' | translate }}</option><option value="24h">{{ 'secureMcp.next24Hours' | translate }}</option><option value="permanent">{{ 'secureMcp.permanentPermission' | translate }}</option><option value="none">{{ 'secureMcp.clearAuthorization' | translate }}</option></select>
+            <button type="button" class="btn btn-sm btn-outline-primary" [disabled]="!canManage || saving" (click)="onChangeClientPermission(client.id, client.generation, permissionChoice.value)">{{ 'secureMcp.applyAuthorization' | translate }}</button>
+          </div><p class="muted">{{ 'secureMcp.applyAuthorizationHelp' | translate }}</p></div></section>
+          <section class="panel"><div class="panel-head"><div><h3>{{ 'secureMcp.connectionsAndCommands' | translate }}</h3><p class="muted">{{ 'secureMcp.connectionAuthorizationHelp' | translate }}</p></div><span class="badge">{{ selectedRows.length }}</span></div>
+            <div *ngIf="loading" class="panel-body muted">{{ 'secureMcp.loadingProfiles' | translate }}</div>
+            <div class="connection-row" *ngFor="let row of selectedRows">
+              <div class="connection-info"><strong>{{ row.displayName }}</strong><p *ngIf="clientCommandSummary(client, row) as summary" class="muted connection-meta">{{ 'secureMcp.commandSummary' | translate:summary }}<span *ngIf="summary.stale" class="warning">{{ 'secureMcp.commandSetStale' | translate }}</span></p></div>
+              <label><span class="sr-only">{{ 'secureMcp.connectionAuthorization' | translate }}</span><select #connectionChoice [value]="clientConnectionState(client, row)" [disabled]="!canManage || saving"><option value="ask">{{ 'secureMcp.askWhenUsed' | translate }}</option><option value="allowed">{{ 'secureMcp.permanentlyAllow' | translate }}</option><option *ngIf="clientConnectionState(client, row) === 'stale'" value="stale" selected disabled>{{ 'secureMcp.connectionStale' | translate }}</option></select></label>
+              <button type="button" class="btn btn-sm btn-outline-primary" [disabled]="!canManage || saving || connectionChoice.value === 'stale'" (click)="onChangeClientConnection(client, row, connectionChoice.value)">{{ 'secureMcp.applyConnectionAuthorization' | translate }}</button>
+              <button type="button" class="btn btn-sm btn-outline-secondary" [disabled]="!canManage || saving" (click)="onOpenClientCommands(client, row)">{{ 'secureMcp.editCommandSet' | translate }}</button>
+              <label><input type="checkbox" [checked]="clientFileTransferEnabled(client, row)" [disabled]="!canManage || saving" (change)="onChangeClientFileTransfer(client, row, $any($event.target).checked, $any($event.target))" /> {{ 'secureMcp.enableFileTransfer' | translate }}</label>
+            </div><p *ngIf="!loading && selectedRows.length === 0" class="panel-body muted">{{ 'secureMcp.noClientProfiles' | translate }}</p>
+            <p class="panel-body muted">{{ 'secureMcp.fileTransferHelp' | translate }}</p>
+          </section>
+          <div class="quiet-note"><p>{{ 'secureMcp.defaultCommandSetHelp' | translate }}</p><button type="button" class="btn btn-link" [disabled]="saving" (click)="onSectionChange('global')">{{ 'secureMcp.configureGlobal' | translate }}</button></div>
+          <div class="actions"><button type="button" class="btn btn-link" [disabled]="!canManage || saving" (click)="onCopyClient(client.id)">{{ 'secureMcp.copyConfiguration' | translate }}</button><button type="button" class="btn btn-link" [disabled]="!canManage || saving" (click)="onRequestResetClient(client.id)">{{ 'secureMcp.resetCredential' | translate }}</button><button type="button" class="btn btn-link danger" [disabled]="!canManage || saving" (click)="onRequestRevokeClient(client.id)">{{ 'secureMcp.revokeClient' | translate }}</button></div>
         </div>
       </div>
+    </section>
+    <section *ngIf="section === 'ssh'">
+      <div class="page-heading"><div><h2>{{ 'secureMcp.sectionSsh' | translate }}</h2><p class="muted">{{ 'secureMcp.authorizedProfilesHelp' | translate }}</p></div></div>
+      <div class="mode-guide"><div class="mode-card"><h3>{{ 'secureMcp.modeAsk' | translate }}</h3><p class="muted">{{ 'secureMcp.askShortHelp' | translate }}</p></div><div class="mode-card"><h3>{{ 'secureMcp.modeAutoEdit' | translate }}</h3><p class="muted">{{ 'secureMcp.autoEditShortHelp' | translate }}</p></div><div class="mode-card"><h3>{{ 'secureMcp.modeFull' | translate }}</h3><p class="muted">{{ 'secureMcp.fullShortHelp' | translate }}</p></div></div>
+      <p *ngIf="loading" class="muted">{{ 'secureMcp.loadingProfiles' | translate }}</p><p *ngIf="!loading && rows.length === 0" class="empty-state muted">{{ 'secureMcp.noProfiles' | translate }}</p>
+      <section class="panel" *ngIf="!loading && rows.length"><div class="panel-head"><h3>{{ 'secureMcp.authorizedProfiles' | translate }}</h3></div><div class="ssh-setting-row" *ngFor="let row of rows">
+        <input type="checkbox" [id]="'ssh-' + row.id" [checked]="row.selected" [disabled]="!canManage || (saving && !row.selected)" (change)="onToggle(row, $any($event.target).checked)" /><label [for]="'ssh-' + row.id">{{ row.displayName }}</label>
+        <label><span class="sr-only">{{ 'secureMcp.approvalMode' | translate }}</span><select [value]="row.operationTier" [disabled]="!canManage || saving || !row.selected" (change)="onTierChange(row, $any($event.target).value)"><option *ngFor="let option of tierOptions" [value]="option.value" [selected]="option.value === row.operationTier">{{ option.labelKey | translate }}</option></select></label>
+        <div class="grant-warning" *ngIf="row.grantStale"><p class="warning">{{ 'secureMcp.staleGrant' | translate }}</p><button type="button" class="btn btn-sm btn-outline-warning" [disabled]="!canManage || saving" (click)="onRefreshGrant(row)">{{ 'secureMcp.saveGrantAgain' | translate }}</button></div>
+      </div></section><details><summary>{{ 'secureMcp.permissionDetails' | translate }}</summary><p class="muted">{{ 'secureMcp.approvalModeHelp' | translate }}</p></details>
+    </section>
+    <section *ngIf="section === 'global'">
+      <div class="page-heading"><div><h2>{{ 'secureMcp.defaultCommandSet' | translate }}</h2><p class="muted">{{ 'secureMcp.defaultCommandSetHelp' | translate }}</p></div><button type="button" class="btn btn-outline-primary" [disabled]="!canManage || saving || !runtime" (click)="onOpenDefaultCommands()">{{ 'secureMcp.editDefaultCommands' | translate }}</button></div>
+      <p class="global-summary"><strong class="summary-value">{{ defaultCommandRules.length }}</strong>{{ 'secureMcp.approvedRuleCount' | translate }}</p>
+      <div class="empty-state" *ngIf="defaultCommandRules.length === 0"><h3>{{ 'secureMcp.startWithQueries' | translate }}</h3><p class="muted">{{ 'secureMcp.lowRiskPresetHelp' | translate }}</p><div class="actions"><button type="button" class="btn btn-primary" [disabled]="!canManage || saving || !runtime" (click)="onOpenLowRiskDefaults()">{{ 'secureMcp.fillLowRiskCommands' | translate }}</button><button type="button" class="btn btn-outline-secondary" [disabled]="!canManage || saving || !runtime" (click)="onOpenDefaultCommands()">{{ 'secureMcp.manualRules' | translate }}</button></div></div>
+      <ng-container *ngIf="defaultCommandRules.length"><ul class="rule-list"><li class="rule-row" *ngFor="let rule of defaultCommandRules"><code class="rule-command">{{ commandRulePreviewLabel(rule) }}</code><span class="badge">{{ (rule.kind === 'family' ? 'secureMcp.commandFamily' : 'secureMcp.commandExact') | translate }}</span></li></ul><button type="button" class="btn btn-outline-primary" [disabled]="!canManage || saving || !runtime" (click)="onOpenLowRiskDefaults()">{{ 'secureMcp.fillLowRiskCommands' | translate }}</button></ng-container>
+      <div class="quiet-note"><h3>{{ 'secureMcp.inheritanceTitle' | translate }}</h3><p>{{ 'secureMcp.inheritanceHelp' | translate }}</p><p>{{ 'secureMcp.readOnlySensitivity' | translate }}</p></div>
+    </section>
+  </div>
+  <section *ngIf="commandEditor as editor" #editorTop class="editor" aria-labelledby="command-set-editor-title">
+    <div class="editor-body">
+      <button type="button" class="btn btn-link back-link" [disabled]="saving" (click)="onCloseCommandEditor()"><i class="fas fa-arrow-left" aria-hidden="true"></i>{{ 'secureMcp.backToSettings' | translate }}</button>
+      <div class="page-heading"><div><h2 id="command-set-editor-title">{{ (editor.scope === 'global' ? 'secureMcp.defaultCommandSet' : 'secureMcp.localCommandSet') | translate }}</h2><p class="muted" *ngIf="editor.scope === 'local'">{{ editor.targetLabel }}</p></div><button *ngIf="editor.scope === 'global'" type="button" class="btn btn-sm btn-outline-primary" [disabled]="!canManage || saving" (click)="onFillLowRiskCommands()">{{ 'secureMcp.fillLowRiskCommands' | translate }}</button></div>
+      <p *ngIf="editor.stale" class="alert alert-warning">{{ 'secureMcp.commandSetStale' | translate }}</p>
+      <label class="inherit-row" *ngIf="editor.scope === 'local'"><input type="checkbox" [checked]="editor.inheritDefaults" [disabled]="!canManage || saving" (change)="onInheritanceChange($any($event.target).checked)" />{{ 'secureMcp.inheritDefaultCommands' | translate }}<span class="badge">{{ defaultCommandRules.length }}</span></label>
+      <section class="panel editor-input-panel"><div class="panel-body"><h3>{{ (editor.editingIndex === null ? 'secureMcp.addCommandRule' : 'secureMcp.editCommandRule') | translate }}</h3>
+        <form class="input-grid" (submit)="$event.preventDefault(); onSaveCommandRule()">
+          <label for="command-rule-kind">{{ 'secureMcp.commandRuleKind' | translate }}<select id="command-rule-kind" [value]="editor.ruleKind" [disabled]="!canManage || saving" (change)="onRuleKindChange($any($event.target).value)"><option value="family">{{ 'secureMcp.commandFamily' | translate }}</option><option value="exact">{{ 'secureMcp.commandExact' | translate }}</option></select></label>
+          <label for="command-rule-input">{{ 'secureMcp.commandRuleInput' | translate }}<input #commandInput id="command-rule-input" class="command-input" type="text" [value]="editor.ruleText" [disabled]="!canManage || saving" (input)="onRuleTextChange($any($event.target).value)" autocomplete="off" spellcheck="false" aria-describedby="command-input-help" /></label>
+          <button type="submit" class="btn btn-primary" [disabled]="!canManage || saving || !editor.ruleText.trim()">{{ (editor.editingIndex === null ? 'secureMcp.addCommandRule' : 'secureMcp.replaceCommandRule') | translate }}</button>
+        </form><p id="command-input-help" class="muted">{{ 'secureMcp.composerShortHelp' | translate }}</p><button type="button" *ngIf="editor.editingIndex !== null || editor.ruleText" class="btn btn-link" [disabled]="!canManage || saving" (click)="onCancelCommandRule()">{{ 'secureMcp.cancelCommandRule' | translate }}</button>
+      </div></section>
+      <div class="rule-toolbar"><h3>{{ (editor.scope === 'global' ? 'secureMcp.globalRules' : 'secureMcp.localRules') | translate }}<span class="count">{{ editor.rules.length }}</span></h3><div class="actions"><button type="button" class="btn btn-sm btn-outline-secondary" [disabled]="!canManage || saving" (click)="onCopyCommandSet()">{{ 'secureMcp.copyCommandSet' | translate }}</button><button type="button" class="btn btn-sm btn-outline-secondary" [attr.aria-expanded]="importOpen" aria-controls="command-import-panel" [disabled]="!canManage || saving" (click)="onToggleCommandImport()">{{ 'secureMcp.importCommands' | translate }}</button><button type="button" class="btn btn-sm btn-outline-danger" [disabled]="!canManage || saving || !editor.rules.length" (click)="onRequestClearCommandSet()">{{ 'secureMcp.clearCommandSet' | translate }}</button></div></div>
+      <section *ngIf="importOpen" id="command-import-panel" class="import-panel"><label for="command-import-text">{{ 'secureMcp.pasteCommandSet' | translate }}</label><textarea id="command-import-text" rows="4" [value]="editor.pasteText" [disabled]="!canManage || saving" (input)="onPasteTextChange($any($event.target).value)" spellcheck="false"></textarea><div class="actions"><button type="button" class="btn btn-sm btn-outline-primary" [disabled]="!canManage || saving || !editor.pasteText.trim()" (click)="onPreviewCommandImport()">{{ 'secureMcp.previewCommandImport' | translate }}</button><button type="button" class="btn btn-link" [disabled]="!canManage || saving" (click)="onCancelCommandImport()">{{ 'secureMcp.cancelCommandImport' | translate }}</button></div>
+        <div class="import-preview" *ngIf="editor.importPreview !== null"><h3>{{ 'secureMcp.commandImportPreview' | translate }}</h3><p class="muted">{{ (editor.scope === 'global' ? 'secureMcp.importGlobalCommandsHelp' : 'secureMcp.importLocalCommandsHelp') | translate }}</p><ul><li *ngFor="let rule of editor.importPreview"><code>{{ commandRulePreviewLabel(rule) }}</code></li></ul><div class="actions"><button type="button" class="btn btn-sm btn-primary" [disabled]="!canManage || saving" (click)="onApplyCommandImport('merge')">{{ 'secureMcp.mergeCommandSet' | translate }}</button><button type="button" class="btn btn-sm btn-outline-danger" [disabled]="!canManage || saving" (click)="onRequestReplaceCommandImport()">{{ 'secureMcp.replaceCommandSet' | translate }}</button></div></div>
+      </section>
+      <ul class="rule-list"><li class="rule-row muted" *ngIf="!editor.rules.length">{{ 'secureMcp.noCommandRules' | translate }}</li><li class="rule-row" *ngFor="let command of localCommandRuleRows(); trackBy: trackCommandRule"><div class="rule-command"><code>{{ command.label }}</code><small>{{ (command.kind === 'family' ? 'secureMcp.commandFamily' : 'secureMcp.commandExact') | translate }}</small></div><span class="badge">{{ (editor.scope === 'global' ? 'secureMcp.commandSourceGlobal' : 'secureMcp.commandSourceLocal') | translate }}</span><div class="rule-actions"><button type="button" class="btn btn-sm btn-link" [disabled]="!canManage || saving" (click)="onEditCommandRule(command.localIndex!)">{{ 'secureMcp.editCommandRule' | translate }}</button><button type="button" class="btn btn-sm btn-link danger" [disabled]="!canManage || saving" (click)="onDeleteCommandRule(command.localIndex!)">{{ 'secureMcp.deleteCommandRule' | translate }}</button></div></li></ul>
+      <section *ngIf="editor.scope === 'local' && editor.inheritDefaults"><div class="rule-toolbar"><h3>{{ 'secureMcp.inheritedRules' | translate }}<span class="count">{{ defaultCommandRules.length }}</span></h3><button type="button" class="btn btn-link" [disabled]="!canManage || saving" (click)="onEditGlobalFromLocal()">{{ 'secureMcp.editDefaultCommands' | translate }}</button></div><p class="muted">{{ 'secureMcp.inheritedCommandsHelp' | translate }}</p><ul class="rule-list"><li *ngIf="!defaultCommandRules.length" class="rule-row muted">{{ 'secureMcp.noCommandRules' | translate }}</li><li class="rule-row" *ngFor="let command of inheritedCommandRuleRows(); trackBy: trackCommandRule"><code class="rule-command">{{ command.label }}</code><span class="badge">{{ 'secureMcp.commandSourceGlobal' | translate }}</span><span class="muted">{{ 'secureMcp.readOnlyRules' | translate }}</span></li></ul></section>
+      <p class="warning" *ngIf="editor.clearPending">{{ 'secureMcp.clearCommandSetPending' | translate }}</p><details><summary>{{ 'secureMcp.ruleDetails' | translate }}</summary><p class="muted">{{ 'secureMcp.commandRuleInputHelp' | translate }}</p><p class="muted">{{ 'secureMcp.commandSetModesHelp' | translate }}</p><p class="muted">{{ 'secureMcp.saveCommandSetHelp' | translate }}</p></details>
     </div>
-  `
+    <footer class="editor-footer">
+      <div *ngIf="editor.error" id="command-set-error" class="alert alert-danger footer-error" role="alert">{{ editor.error | translate }}<span>{{ editor.detail }}</span></div>
+      <div class="footer-info"><strong>{{ (commandSetDirty ? 'secureMcp.unsavedChanges' : 'secureMcp.noChanges') | translate }}</strong><p class="muted">{{ (editor.scope === 'global' ? 'secureMcp.globalSaveScope' : 'secureMcp.localSaveScope') | translate }}</p></div><div class="actions"><button type="button" class="btn btn-outline-secondary" [disabled]="saving" (click)="onCloseCommandEditor()">{{ 'secureMcp.cancelCommandSet' | translate }}</button><button type="button" class="btn btn-primary" [disabled]="!canManage || saving || (!commandSetDirty && !editor.stale)" (click)="onSaveCommandSet()">{{ 'secureMcp.saveCommandSet' | translate }}</button></div>
+    </footer>
+  </section>
+  <dialog #confirmationDialog (cancel)="onCancelConfirmation($event)" aria-labelledby="settings-confirm-title" aria-describedby="settings-confirm-body">
+    <ng-container *ngIf="confirmation as prompt"><h2 id="settings-confirm-title">{{ prompt.titleKey | translate }}</h2><p id="settings-confirm-body">{{ prompt.bodyKey | translate }}</p><div class="dialog-actions">
+      <button type="button" class="btn btn-outline-secondary" [disabled]="saving" (click)="onConfirmation('cancel')">{{ 'secureMcp.continueEditing' | translate }}</button>
+      <ng-container *ngIf="prompt.save || prompt.apply"><button type="button" class="btn btn-outline-danger" [disabled]="saving" (click)="onConfirmation('discard')">{{ 'secureMcp.discardChanges' | translate }}</button><button type="button" class="btn btn-primary" [disabled]="saving" (click)="onConfirmation(prompt.save ? 'save' : 'apply')">{{ (prompt.save ? 'secureMcp.saveAndLeave' : 'secureMcp.applyAndSwitch') | translate }}</button></ng-container>
+      <button *ngIf="!prompt.save && !prompt.apply" type="button" class="btn" [class.btn-danger]="prompt.danger" [class.btn-primary]="!prompt.danger" [disabled]="saving" (click)="onConfirmation('confirm')">{{ 'secureMcp.confirmAction' | translate }}</button>
+    </div></ng-container>
+  </dialog>
+</div>
+`

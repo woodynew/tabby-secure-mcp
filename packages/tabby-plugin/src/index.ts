@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common'
-import { Inject, NgModule } from '@angular/core'
+import { Inject, NgModule, NgZone } from '@angular/core'
 import { NgbModule } from '@ng-bootstrap/ng-bootstrap'
-import { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ProfilesService } from 'tabby-core'
+import TabbyCoreModule, { BOOTSTRAP_DATA, BootstrapData, ConfigProvider, ConfigService, ProfilesService, type BaseTabComponent } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 
 import { AuditService } from './audit/audit-service'
@@ -13,22 +13,25 @@ import { NgBootstrapApprovalPresenter } from './approval/ng-bootstrap-approval-p
 import { OpenApprovalModalComponent } from './approval/open-approval-modal.component'
 import { PairingApprovalModalComponent } from './approval/pairing-approval-modal.component'
 import { SecureMcpConfigProvider } from './config/secure-mcp-config-provider'
+import { readCommandSessionClosePolicy } from './config/secure-mcp-config'
 import { normalizeWindowBootstrap } from './runtime/bootstrap-data'
 import { PluginRuntimeLifecycle } from './runtime/plugin-runtime-lifecycle'
-import { PluginRuntimeService } from './runtime/plugin-runtime-service'
+import { PluginHttpRuntime } from './runtime/plugin-http-runtime'
 import { RuntimeLeaseState } from './runtime/runtime-lease-state'
 import { AuthorizedProfilesService } from './services/authorized-profiles.service'
 import { SecureMcpSettingsComponent } from './settings/secure-mcp-settings.component'
 import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab.provider'
+import { SecureMcpTranslations } from './i18n/secure-mcp-translations'
 
 @NgModule({
-  imports: [CommonModule, NgbModule],
+  imports: [TabbyCoreModule, CommonModule, NgbModule],
   declarations: [
     SecureMcpSettingsComponent,
     PairingApprovalModalComponent,
     OpenApprovalModalComponent,
   ],
   providers: [
+    SecureMcpTranslations,
     AuthorizedProfilesService,
     PermanentAuthorizationStore,
     RuntimeLeaseState,
@@ -42,6 +45,8 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         presenter: NgBootstrapApprovalPresenter,
         leaseState: RuntimeLeaseState,
         memory: PermanentAuthorizationStore,
+        audit: AuditService,
+        config: ConfigService,
       ) =>
         new ApprovalGatekeeper(
           authorizedProfiles,
@@ -51,6 +56,8 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
           () => leaseState.getLeaseEpoch(),
           new SystemApprovalScheduler(),
           memory,
+          { audit, closeTab: async tab => { (tab as BaseTabComponent).destroy() } },
+          () => readCommandSessionClosePolicy(config.store),
         ),
       deps: [
         AuthorizedProfilesService,
@@ -58,25 +65,33 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
         NgBootstrapApprovalPresenter,
         RuntimeLeaseState,
         PermanentAuthorizationStore,
+        AuditService,
+        ConfigService,
       ],
     },
     {
-      provide: PluginRuntimeService,
+      provide: PluginHttpRuntime,
       useFactory: (
         bootstrapData: BootstrapData,
         leaseState: RuntimeLeaseState,
         gatekeeper: ApprovalGatekeeper,
         authorizedProfiles: AuthorizedProfilesService,
         audit: AuditService,
+        config: ConfigService,
+        presenter: NgBootstrapApprovalPresenter,
+        zone: NgZone,
       ) =>
-        new PluginRuntimeService(
+        new PluginHttpRuntime(
+          config,
           () => normalizeWindowBootstrap(bootstrapData),
           leaseState,
           gatekeeper,
           authorizedProfiles,
           audit,
+          presenter,
+          { notify: work => zone.run(work) },
         ),
-      deps: [BOOTSTRAP_DATA, RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService],
+      deps: [BOOTSTRAP_DATA, RuntimeLeaseState, ApprovalGatekeeper, AuthorizedProfilesService, AuditService, ConfigService, NgBootstrapApprovalPresenter, NgZone],
     },
     PluginRuntimeLifecycle,
     { provide: ConfigProvider, useClass: SecureMcpConfigProvider, multi: true },
@@ -84,5 +99,8 @@ import { SecureMcpSettingsTabProvider } from './settings/secure-mcp-settings-tab
   ],
 })
 export default class TabbySecureMcpPluginModule {
-  constructor(@Inject(PluginRuntimeLifecycle) _runtimeLifecycle: PluginRuntimeLifecycle) {}
+  constructor(
+    @Inject(SecureMcpTranslations) _translations: SecureMcpTranslations,
+    @Inject(PluginRuntimeLifecycle) _runtimeLifecycle: PluginRuntimeLifecycle,
+  ) {}
 }

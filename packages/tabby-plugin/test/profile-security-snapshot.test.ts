@@ -35,7 +35,7 @@ describe('profile security snapshot', () => {
     const second = buildProfileSecuritySnapshot(profile, runKey)
 
     expect(first).toEqual(second)
-    expect(first).toEqual({ version: 1, digest: expect.stringMatching(/^[0-9a-f]{64}$/) })
+    expect(first).toEqual({ version: 2, digest: expect.stringMatching(/^[0-9a-f]{64}$/) })
   })
 
   it('changes digest when run key changes but projection is unchanged', () => {

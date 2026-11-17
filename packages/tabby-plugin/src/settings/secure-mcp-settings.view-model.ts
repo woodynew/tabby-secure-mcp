@@ -1,4 +1,5 @@
 import type { PartialProfile, Profile } from 'tabby-core'
+import type { ApprovedCommandRule } from '@tabby-secure-mcp/ipc-contract/command-policy'
 
 import { stableProfileDigest } from '../approval/profile-security-snapshot'
 import type { GrantedOperationTier } from '../authorization/operation-tier-policy'
@@ -14,14 +15,39 @@ export interface SecureMcpSettingsRow {
   grantStale: boolean
 }
 
+export interface CommandSetEditor {
+  scope: 'global' | 'local'
+  targetLabel: string
+  rules: ApprovedCommandRule[]
+  inheritDefaults: boolean
+  stale: boolean
+  ruleKind: 'family' | 'exact'
+  ruleText: string
+  editingIndex: number | null
+  pasteText: string
+  importPreview: ApprovedCommandRule[] | null
+  clearPending: boolean
+  error: string | null
+  detail: string
+}
+
+export interface CommandSetRuleRow {
+  key: string
+  kind: ApprovedCommandRule['kind']
+  label: string
+  global: boolean
+  local: boolean
+  localIndex: number | null
+}
+
 export const SETTINGS_OPERATION_TIER_OPTIONS: ReadonlyArray<{
   value: GrantedOperationTier
-  label: string
+  labelKey: string
 }> = [
-  { value: 'none', label: '未授予' },
-  { value: 'readonly', label: '低级 · 只读' },
-  { value: 'readwrite', label: '中级 · 读写' },
-  { value: 'full', label: '高级 · 完全控制' },
+  { value: 'none', labelKey: 'secureMcp.commandDisabled' },
+  { value: 'ask', labelKey: 'secureMcp.modeAsk' },
+  { value: 'auto_edit', labelKey: 'secureMcp.modeAutoEdit' },
+  { value: 'full', labelKey: 'secureMcp.modeFull' },
 ]
 
 export function buildSecureMcpSettingsRows(

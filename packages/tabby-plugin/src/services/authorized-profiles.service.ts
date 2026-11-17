@@ -3,6 +3,7 @@ import { ConfigService, ProfilesService, type PartialProfile, type Profile } fro
 
 import { readAuthorizedSshProfileIds } from '../config/secure-mcp-config'
 import { TargetUnavailableError } from '../profiles/errors'
+import { resolveEffectiveProfile } from '../profiles/effective-profile'
 import { isEligibleSshProfile, readEligibleSshDisplayName } from '../profiles/profile-eligibility'
 import { generateProfileRef, isProfileRef } from '../profiles/profile-ref'
 
@@ -23,7 +24,7 @@ export class AuthorizedProfilesService {
 
   async listAuthorizedProfiles(): Promise<AuthorizedProfileView[]> {
     const profiles = await this.profilesService.getProfiles({ includeBuiltin: false, clone: true })
-    const whitelist = new Set(readAuthorizedSshProfileIds(this.config.store))
+    const whitelist = new Set(readAuthorizedSshProfileIds(this.config.store, this.config))
     const eligibleById = this.indexEligibleProfiles(profiles)
     this.syncRefs(whitelist, eligibleById)
 
@@ -44,6 +45,15 @@ export class AuthorizedProfilesService {
     this.idToRef.clear()
   }
 
+  resolveAuthorizedProfileNow(profileRef: string): PartialProfile<Profile> {
+    const id = this.refToId.get(profileRef)
+    const rawProfiles: unknown = this.config.store.profiles
+    if (!id || !readAuthorizedSshProfileIds(this.config.store, this.config).includes(id) || !Array.isArray(rawProfiles)) throw new TargetUnavailableError()
+    const profile = rawProfiles.find(candidate => candidate?.id === id)
+    if (!profile || !isEligibleSshProfile(profile)) throw new TargetUnavailableError()
+    return resolveEffectiveProfile(profile, this.profilesService)
+  }
+
   async resolveAuthorizedProfile(profileRef: string): Promise<PartialProfile<Profile>> {
     if (!isProfileRef(profileRef)) {
       throw new TargetUnavailableError()
@@ -55,7 +65,7 @@ export class AuthorizedProfilesService {
     }
 
     const profiles = await this.profilesService.getProfiles({ includeBuiltin: false, clone: true })
-    const whitelist = new Set(readAuthorizedSshProfileIds(this.config.store))
+    const whitelist = new Set(readAuthorizedSshProfileIds(this.config.store, this.config))
     const eligibleById = this.indexEligibleProfiles(profiles)
     this.syncRefs(whitelist, eligibleById)
 
@@ -68,7 +78,7 @@ export class AuthorizedProfilesService {
       throw new TargetUnavailableError()
     }
 
-    return profile
+    return resolveEffectiveProfile(profile, this.profilesService)
   }
 
   private indexEligibleProfiles(profiles: PartialProfile<Profile>[]): Map<string, string> {

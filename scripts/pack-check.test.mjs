@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -9,11 +9,9 @@ import { describe, expect, it } from 'vitest'
 import {
   EXPECTED_VERSION,
   TABBY_PLUGIN_KEYWORD,
-  assertCompanionLaunchMode,
   assertPackManifest,
   assertTabbyPluginDiscoveryManifest,
   inspectPackedTarball,
-  listPackageJsonFromTarball,
   listTarballEntries,
   resolveTabbyPluginAuthor,
 } from './pack-check-core.mjs'
@@ -61,40 +59,6 @@ describe('assertTabbyPluginDiscoveryManifest', () => {
   })
 })
 
-describe('assertCompanionLaunchMode', () => {
-  const bin = { 'tabby-secure-mcp': './dist/cli.js' }
-
-  it('accepts a Windows tarball whose bin shim targets the CLI', () => {
-    expect(() =>
-      assertCompanionLaunchMode({
-        mode: 0o100644,
-        platform: 'win32',
-        bin,
-      }),
-    ).not.toThrow()
-  })
-
-  it('rejects a companion whose bin field does not target the CLI', () => {
-    expect(() =>
-      assertCompanionLaunchMode({
-        mode: 0o100755,
-        platform: 'win32',
-        bin: { 'tabby-secure-mcp': './other.js' },
-      }),
-    ).toThrow(/bin/i)
-  })
-
-  it('rejects a Unix tarball whose CLI is not executable', () => {
-    expect(() =>
-      assertCompanionLaunchMode({
-        mode: 0o100644,
-        platform: 'linux',
-        bin,
-      }),
-    ).toThrow(/executable/i)
-  })
-})
-
 describe('assertPackManifest', () => {
   it('rejects workspace and file dependencies', () => {
     expect(() =>
@@ -105,20 +69,56 @@ describe('assertPackManifest', () => {
     ).toThrow(/file:/i)
   })
 
-  it('requires companion tarballs to ship without runtime dependencies', () => {
-    expect(() =>
-      assertPackManifest({ version: '0.1.0', dependencies: { zod: '4.6.7' } }, 'companion'),
-    ).toThrow(/runtime dependencies/i)
-    expect(assertPackManifest({ version: '0.1.0' }, 'companion')).toBeUndefined()
+  it('rejects plugin runtime dependencies on the internal companion', () => {
+    expect(() => assertPackManifest({ version: '0.1.0', dependencies: { '@tabby-secure-mcp/companion': '0.1.0' } }, 'plugin')).toThrow(/runtime|self.contained/i)
+    expect(() => assertPackManifest({ version: '0.1.0', optionalDependencies: { '@tabby-secure-mcp/companion': '0.1.0' } }, 'plugin')).toThrow(/runtime|self.contained/i)
+    expect(() => assertPackManifest({ version: '0.1.0', devDependencies: { '@tabby-secure-mcp/companion': '0.1.0' } }, 'plugin')).not.toThrow()
+  })
+})
+
+describe('single self-contained plugin tarball', () => {
+  const umd = 'if(typeof module === "object") module.exports = {}; else if (define.amd) define([], () => ({}));'
+
+  async function inspectBundle(bundle = umd) {
+    const packDir = await mkdtemp(path.join(tmpdir(), 'single-plugin-pack-'))
+    await writeMinimalTgz(path.join(packDir, 'tabby-secure-mcp-0.1.0.tgz'), {
+      'package/package.json': JSON.stringify({ name: 'tabby-secure-mcp', version: EXPECTED_VERSION, author: 'test', keywords: [TABBY_PLUGIN_KEYWORD], main: 'dist/index.js' }),
+      'package/dist/index.js': bundle,
+    })
+    try {
+      return await inspectPackedTarball({ packDir, runPack: false })
+    } finally {
+      await rm(packDir, { recursive: true, force: true })
+    }
+  }
+
+  it('accepts the plugin alone without a companion tarball or CLI', async () => {
+    const result = await inspectBundle()
+    expect(Object.keys(result)).toEqual(['plugin'])
+  })
+
+  it.each(['@tabby-secure-mcp/companion', '@modelcontextprotocol/server', 'zod', './plugin.cjs'])('rejects an unbundled runtime import: %s', async (name) => {
+    await expect(inspectBundle(umd + '\nrequire(' + JSON.stringify(name) + ')')).rejects.toThrow(/self.contained|external|unbundled/i)
+  })
+
+  it('rejects a plain CommonJS entry without UMD support', async () => {
+    await expect(inspectBundle('module.exports = {}')).rejects.toThrow(/UMD/i)
+  })
+
+  it('rejects node: requires that Tabby cannot load', async () => {
+    await expect(inspectBundle(umd + '\nrequire("node:http")')).rejects.toThrow(/node:/i)
+  })
+
+  it('ignores require text in generated-code strings and comments', async () => {
+    const bundle = umd + '\nconst code = `require("ajv/dist/runtime/validation_error")`;\n// require("zod")'
+    await expect(inspectBundle(bundle)).resolves.toHaveProperty('plugin')
   })
 })
 
 describe('inspectPackedTarball integration', () => {
   it('validates real workspace tarballs after build', async () => {
     const pluginBundle = path.join(repoRoot, 'packages/tabby-plugin/dist/index.js')
-    const companionCli = path.join(repoRoot, 'packages/companion/dist/cli.js')
     await expect(readFile(pluginBundle)).resolves.toBeDefined()
-    await expect(readFile(companionCli)).resolves.toBeDefined()
 
     const result = await inspectPackedTarball({
       repoRoot,
@@ -126,18 +126,9 @@ describe('inspectPackedTarball integration', () => {
     })
 
     expect(result.plugin.version).toBe(EXPECTED_VERSION)
-    expect(result.companion.version).toBe(EXPECTED_VERSION)
     expect(result.plugin.entries.sort()).toEqual(['dist/index.js', 'package.json'])
-    expect(result.companion.entries.sort()).toEqual(['dist/cli.js', 'package.json'])
     expect(result.plugin.bundle).toMatch(/webpackUniversalModuleDefinition|module\.exports/)
-    expect(result.companion.shebang).toBe('#!/usr/bin/env node\n')
-    expect(() =>
-      assertCompanionLaunchMode({
-        mode: result.companion.mode,
-        platform: process.platform,
-        bin: result.companion.bin,
-      }),
-    ).not.toThrow()
+    expect(Object.keys(result)).toEqual(['plugin'])
   })
 })
 

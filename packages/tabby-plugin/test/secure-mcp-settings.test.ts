@@ -3,7 +3,7 @@ import type { PartialProfile, Profile } from 'tabby-core'
 
 import { stableProfileDigest } from '../src/approval/profile-security-snapshot'
 import { PermanentAuthorizationStore } from '../src/authorization/permanent-authorization-store'
-import { readPermanentAuthorizations } from '../src/config/secure-mcp-config'
+import { readCommandSessionClosePolicy, readPermanentAuthorizations } from '../src/config/secure-mcp-config'
 import { secureMcpSettingsTabMetadata } from '../src/settings/secure-mcp-settings.metadata'
 import { SecureMcpSettingsComponent } from '../src/settings/secure-mcp-settings.component'
 import { buildSecureMcpSettingsRows } from '../src/settings/secure-mcp-settings.view-model'
@@ -90,17 +90,61 @@ describe('Secure MCP settings view model', () => {
       {
         profileId: 'ssh-1',
         openSession: true,
-        operationTier: 'readonly',
+        operationTier: 'ask',
         profileDigest: fresh,
         updatedAt: '2026-10-19T00:00:00.000Z',
       },
     ])
-    expect(current[0]).toMatchObject({ operationTier: 'readonly', grantStale: false })
+    expect(current[0]).toMatchObject({ operationTier: 'ask', grantStale: false })
   })
 })
 
 describe('Secure MCP settings grant management', () => {
-  it('persists a tier and clears it when the profile is removed from the whitelist', async () => {
+  it('saves the global close policy even when no SSH profiles exist', async () => {
+    const harness = createTabbyConfigProxyHarness()
+    const config = { store: harness.store, save: vi.fn(async () => undefined) }
+    const component = new SecureMcpSettingsComponent(
+      config as never, { getProfiles: async () => [] } as never,
+      new PermanentAuthorizationStore(config as never),
+    )
+    await component.ngOnInit()
+    expect(component.commandSessionClosePolicy).toBe('keep')
+    await component.onClosePolicyChange('after-completion')
+    expect(component.commandSessionClosePolicy).toBe('after-completion')
+    expect(readCommandSessionClosePolicy(harness.store)).toBe('after-completion')
+    await component.reload()
+    expect(component.commandSessionClosePolicy).toBe('after-completion')
+    config.save.mockRejectedValueOnce(new Error('disk full'))
+    const select = { value: 'keep' }
+    await component.onClosePolicyChange('keep', select)
+    expect(component.commandSessionClosePolicy).toBe('after-completion')
+    expect(select.value).toBe('after-completion')
+    expect(readCommandSessionClosePolicy(harness.store)).toBe('after-completion')
+    expect(component.error).toBe('secureMcp.errorSaveClosePolicy')
+    expect(component.saving).toBe(false)
+    await component.onClosePolicyChange('invalid')
+    expect(component.commandSessionClosePolicy).toBe('after-completion')
+  })
+
+  it('keeps a translated save error after refreshing the selected profiles', async () => {
+    const harness = createTabbyConfigProxyHarness()
+    const config = { store: harness.store, save: vi.fn(async () => { throw new Error('disk full') }) }
+    const profile: PartialProfile<Profile> = {
+      id: 'ssh-1', type: 'ssh', name: 'Test', options: {},
+      isBuiltin: false, isTemplate: false,
+    }
+    const component = new SecureMcpSettingsComponent(
+      config as never, { getProfiles: async () => [profile], getConfigProxyForProfile: (profile: any) => profile } as never,
+      new PermanentAuthorizationStore(config as never),
+    )
+    await component.reload()
+    await component.onToggle(component.rows[0]!, true)
+    expect(component.error).toBe('secureMcp.errorSaveProfiles')
+    expect(component.loading).toBe(false)
+    expect(component.saving).toBe(false)
+  })
+
+  it('persists an approval mode and clears it when the profile is removed from the whitelist', async () => {
     const harness = createTabbyConfigProxyHarness()
     const save = vi.fn(async () => undefined)
     const config = { store: harness.store, save }
@@ -113,6 +157,7 @@ describe('Secure MCP settings grant management', () => {
       isTemplate: false,
     }
     const profilesService = {
+      getConfigProxyForProfile: (profile: any) => profile,
       getProfiles: vi.fn(async () => [profile]),
     }
     const store = new PermanentAuthorizationStore(config as never)
@@ -126,17 +171,17 @@ describe('Secure MCP settings grant management', () => {
     expect(component.rows[0]).toMatchObject({ selected: false, operationTier: 'none' })
 
     await component.onToggle(component.rows[0]!, true)
-    await component.onTierChange(component.rows[0]!, 'readwrite')
+    await component.onTierChange(component.rows[0]!, 'auto_edit')
 
     expect(component.rows[0]).toMatchObject({
       selected: true,
-      operationTier: 'readwrite',
+      operationTier: 'auto_edit',
       openSession: false,
       grantStale: false,
     })
     expect(readPermanentAuthorizations(harness.store)[0]).toMatchObject({
       profileId: 'ssh-1',
-      operationTier: 'readwrite',
+      operationTier: 'auto_edit',
       profileDigest: stableProfileDigest(profile),
     })
 

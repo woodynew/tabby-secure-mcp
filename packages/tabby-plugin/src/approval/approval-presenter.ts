@@ -1,6 +1,8 @@
+import type { AnalyzedSshCommand } from '@tabby-secure-mcp/ipc-contract/command-policy'
 import { sanitizeApprovalDisplayText } from './display-sanitizer'
 
 export type ApprovalDecision = 'allow' | 'deny'
+export type CommandApprovalDecision = ApprovalDecision | 'remember'
 
 export interface ApprovalPresentationContext {
   signal: AbortSignal
@@ -12,6 +14,7 @@ export interface PairingApprovalViewModel {
   clientIdentity: string
   companionLabel: string
   remainingSeconds: number
+  allowDuration?: boolean
 }
 
 export interface OpenApprovalViewModel {
@@ -22,6 +25,31 @@ export interface OpenApprovalViewModel {
   remainingSeconds: number
 }
 
+export interface CommandApprovalViewModel extends OpenApprovalViewModel {
+  risk: 'low' | 'high' | 'unknown'
+  riskReasonKey: string
+  ruleKind: 'family' | 'exact'
+  ruleText: string
+  ruleFingerprint: string
+  allowRemember: boolean
+  approveConnection: boolean
+}
+
+export function buildCommandApprovalDetails(analysis: AnalyzedSshCommand): {
+  riskReasonKey: string
+  ruleKind: 'family' | 'exact'
+  ruleText: string
+  ruleFingerprint: string
+} {
+  const rule = analysis.rule
+  return {
+    riskReasonKey: 'secureMcp.commandReason_' + analysis.reasonCode,
+    ruleKind: rule.kind,
+    ruleText: rule.kind === 'family' ? rule.argv.join(' ') : rule.program,
+    ruleFingerprint: rule.kind === 'exact' ? rule.hash : '',
+  }
+}
+
 export interface ApprovalPresenter {
   presentPairing(
     viewModel: PairingApprovalViewModel,
@@ -29,6 +57,7 @@ export interface ApprovalPresenter {
   ): Promise<ApprovalDecision>
 
   presentOpen(viewModel: OpenApprovalViewModel, context: ApprovalPresentationContext): Promise<ApprovalDecision>
+  presentCommand?(viewModel: CommandApprovalViewModel, context: ApprovalPresentationContext): Promise<CommandApprovalDecision>
 }
 
 export function buildOpenApprovalViewModel(input: {

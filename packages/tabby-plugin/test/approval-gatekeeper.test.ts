@@ -6,12 +6,13 @@ import type {
   ApprovalPresentationContext,
   ApprovalPresenter,
 } from '../src/approval/approval-presenter'
-import { ApprovalGatekeeper, APPROVAL_WINDOW_MS } from '../src/approval/approval-gatekeeper'
+import { ApprovalGatekeeper, APPROVAL_WINDOW_MS } from './helpers/test-gatekeeper'
 import { FakeApprovalScheduler } from '../src/approval/approval-scheduler'
 import type { MonotonicClock } from '../src/approval/monotonic-clock'
 import { stableProfileDigest } from '../src/approval/profile-security-snapshot'
 import type { AuthorizationMemory, EffectiveGrant } from '../src/authorization/permanent-authorization-store'
 import { AuthorizedProfilesService } from '../src/services/authorized-profiles.service'
+import type { CommandSessionClosePolicy } from '../src/config/secure-mcp-config'
 
 const SECRET_OPTIONS = {
   host: 'secret-host.example',
@@ -96,7 +97,9 @@ function createHarness(options: {
     store: { secureMcp: { authorizedSshProfileIds: [...(options.whitelist ?? ['allowed'])] } },
     save: vi.fn(async () => undefined),
   }
+  Object.defineProperty(config.store, 'profiles', { get: () => currentProfiles })
   const profilesService = {
+    getConfigProxyForProfile: (profile: any) => profile,
     getProfiles: vi.fn(async () => currentProfiles.map(p => ({ ...p, options: { ...p.options } }))),
     openNewTabForProfile: vi.fn(async () => ({})),
     sendInput: vi.fn(),
@@ -178,7 +181,7 @@ function openRequest(
 }
 
 describe('ApprovalGatekeeper', () => {
-  it('expires open approval at exactly 30 seconds without opening a tab', async () => {
+  it('expires open approval at exactly 60 seconds without opening a tab', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
     const hungPresenter: ApprovalPresenter = {
@@ -195,14 +198,19 @@ describe('ApprovalGatekeeper', () => {
     )
 
     const pending = gatekeeper.requestOpen(openRequest(harness, { profileRef, requestId: REQUEST_A }))
-    harness.advance(APPROVAL_WINDOW_MS)
+    let settled = false
+    void pending.then(() => { settled = true })
+    harness.advance(59_999)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    harness.advance(1)
     const result = await pending
 
     expect(result).toEqual({ ok: false, code: 'not_approved' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
   })
 
-  it('caps caller deadlines to receivedAt + 30_000ms', async () => {
+  it('caps caller deadlines to receivedAt + 60_000ms', async () => {
     const harness = createHarness()
     const profileRef = await harness.profileRef()
     const hungPresenter: ApprovalPresenter = {
@@ -222,7 +230,7 @@ describe('ApprovalGatekeeper', () => {
       openRequest(harness, {
         profileRef,
         requestId: REQUEST_B,
-        deadlineMonotonicMs: harness.clock.now() + 60_000,
+        deadlineMonotonicMs: harness.clock.now() + 90_000,
       }),
     )
     harness.advance(APPROVAL_WINDOW_MS)
@@ -505,7 +513,7 @@ describe('ApprovalGatekeeper', () => {
     })
   })
 
-  it('expires pairing approval at exactly 30 seconds', async () => {
+  it('expires pairing approval at exactly 60 seconds', async () => {
     const harness = createHarness()
     const hungPresenter: ApprovalPresenter = {
       presentPairing: () => new Promise(() => undefined),
@@ -615,7 +623,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
     const controller = new AbortController()
@@ -664,7 +672,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readwrite',
+      operationTier: 'ask',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
 
@@ -674,10 +682,10 @@ describe('ApprovalGatekeeper', () => {
       ok: true,
       profileRef,
       openSession: true,
-      operationTier: 'readwrite',
+      operationTier: 'ask',
     })
     if (described.ok) {
-      expect(described.policy.map(entry => entry.tier)).toEqual(['readonly', 'readwrite', 'full'])
+      expect(described.policy.map(entry => entry.mode)).toEqual(['ask', 'auto_edit', 'full'])
     }
     expect(harness.presenter.openCalls).toEqual([])
     expect(
@@ -694,7 +702,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
     const commandTab = fakeCommandTab()
@@ -714,7 +722,9 @@ describe('ApprovalGatekeeper', () => {
       output: 'files\n',
       truncated: false,
     })
-    expect(commandTab.sent[0]).toBe('ls -la\r')
+    expect(commandTab.sent).toHaveLength(1)
+    expect(commandTab.sent[0]).toMatch(/^\/bin\/sh -c /)
+    expect(commandTab.tab.destroy).not.toHaveBeenCalled()
     expect(harness.profilesService.openNewTabForProfile).toHaveBeenCalledTimes(1)
     expect(harness.profilesService.sendInput).not.toHaveBeenCalled()
     expect(harness.presenter.openCalls).toEqual([])
@@ -726,7 +736,7 @@ describe('ApprovalGatekeeper', () => {
     const memory = new FakeAuthorizationMemory()
     memory.remember('allowed', stableProfileDigest(sshProfile()), {
       openSession: true,
-      operationTier: 'readonly',
+      operationTier: 'auto_edit',
     })
     const gatekeeper = gatekeeperWithMemory(harness, memory)
 
@@ -747,7 +757,7 @@ describe('ApprovalGatekeeper', () => {
         command: 'ls | head',
         deadlineMonotonicMs: harness.clock.now() + 45_000,
       }),
-    ).toEqual({ ok: false, code: 'not_approved' })
+    ).toEqual({ ok: false, code: 'unsupported_command' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
 
     const staleMemory = new FakeAuthorizationMemory()
@@ -764,7 +774,7 @@ describe('ApprovalGatekeeper', () => {
         command: 'ls',
         deadlineMonotonicMs: harness.clock.now() + 45_000,
       }),
-    ).toEqual({ ok: false, code: 'not_approved' })
+    ).toEqual({ ok: false, code: 'command_disabled' })
     expect(harness.profilesService.openNewTabForProfile).not.toHaveBeenCalled()
   })
 })
@@ -792,12 +802,27 @@ class FakeAuthorizationMemory implements AuthorizationMemory {
   }
 }
 
-function fakeCommandTab(): { tab: object; sent: string[] } {
+function fakeCommandTab(options: { complete?: boolean; output?: string } = {}) {
   const sent: string[] = []
   const listeners: Array<(chunk: string) => void> = []
+  const destroyed: Array<() => void> = []
+  const subscriptions = { active: 0 }
   return {
     sent,
+    subscriptions,
     tab: {
+      destroy: vi.fn(() => {
+        for (const next of destroyed) {
+          next()
+        }
+      }),
+      destroyed$: {
+        subscribe(observer: { next?: () => void }) {
+          const next = observer.next ?? (() => undefined)
+          destroyed.push(next)
+          return { unsubscribe() { destroyed.splice(destroyed.indexOf(next), 1) } }
+        },
+      },
       session: { open: true },
       frontendReady$: { subscribe: () => ({ unsubscribe() {} }) },
       output$: {
@@ -805,17 +830,22 @@ function fakeCommandTab(): { tab: object; sent: string[] } {
           if (observer.next) {
             listeners.push(observer.next)
           }
-          return { unsubscribe() {} }
+          subscriptions.active += 1
+          return { unsubscribe() { subscriptions.active -= 1 } }
         },
       },
       sendInput(data: string) {
         sent.push(data)
-        const marker = data.match(/'(__tabby_secure_mcp_[0-9a-f]+__)'/)?.[1]
-        if (!marker) {
+        const parts = data.match(/'([0-9a-f]+)' '([0-9a-f]+)'\r$/)
+        if (!parts) {
           return
         }
         for (const listener of listeners) {
-          listener(`files\n${marker}\n`)
+          listener(`\u001e${parts[1]}${parts[2]}:start\u001f`)
+          listener(options.output ?? 'files\n')
+          if (options.complete !== false) {
+            listener(`\u001e${parts[1]}${parts[2]}:end\u001f`)
+          }
         }
       },
     },
@@ -825,6 +855,7 @@ function fakeCommandTab(): { tab: object; sent: string[] } {
 function gatekeeperWithMemory(
   harness: ReturnType<typeof createHarness>,
   memory: AuthorizationMemory,
+  closePolicy: () => CommandSessionClosePolicy = () => 'keep',
 ): ApprovalGatekeeper {
   return new ApprovalGatekeeper(
     harness.authorizedProfiles,
@@ -834,5 +865,119 @@ function gatekeeperWithMemory(
     () => harness.getLeaseEpoch(),
     harness.scheduler,
     memory,
+    { audit: { append: async () => undefined }, closeTab: async tab => { await (tab as { destroy?: () => unknown }).destroy?.() } },
+    closePolicy,
   )
 }
+
+async function commandCloseHarness(
+  policy: () => CommandSessionClosePolicy,
+  options: Parameters<typeof fakeCommandTab>[0] = {},
+  operationTier: 'auto_edit' | 'full' = 'auto_edit',
+) {
+  const harness = createHarness()
+  const memory = new FakeAuthorizationMemory()
+  memory.remember('allowed', stableProfileDigest(sshProfile()), {
+    openSession: true, operationTier,
+  })
+  const gatekeeper = gatekeeperWithMemory(harness, memory, policy)
+  const commandTab = fakeCommandTab(options)
+  harness.profilesService.openNewTabForProfile.mockResolvedValue(commandTab.tab)
+  const request = {
+    requestId: REQUEST_A, leaseEpoch: 1, profileRef: await harness.profileRef(),
+    command: 'ls', deadlineMonotonicMs: harness.clock.now() + 45_000,
+  }
+  return { ...harness, gatekeeper, commandTab, request }
+}
+
+describe('command session close policy', () => {
+  it.each(['ls', 'false'])('closes only the completed command session for %s', async command => {
+    const harness = await commandCloseHarness(() => 'after-completion', {}, command === 'false' ? 'full' : 'auto_edit')
+    const otherTab = fakeCommandTab()
+    const result = await harness.gatekeeper.runAuthorizedSshCommand({ ...harness.request, command })
+    expect(result).toEqual({
+      ok: true, commandClass: command === 'false' ? 'full_control' : 'read_only', commandRisk: command === 'false' ? 'unknown' : 'low', output: 'files\n', truncated: false,
+    })
+    expect(harness.commandTab.tab.destroy).toHaveBeenCalledOnce()
+    expect(harness.commandTab.subscriptions.active).toBe(0)
+    expect(otherTab.tab.destroy).not.toHaveBeenCalled()
+  })
+
+  it('fixes the close policy at request start and reads changes for the next request', async () => {
+    let policy: CommandSessionClosePolicy = 'after-completion'
+    const harness = await commandCloseHarness(() => policy)
+    harness.profilesService.openNewTabForProfile.mockImplementation(async () => {
+      policy = 'keep'
+      return harness.commandTab.tab
+    })
+    expect((await harness.gatekeeper.runAuthorizedSshCommand(harness.request)).ok).toBe(true)
+    expect(harness.commandTab.tab.destroy).toHaveBeenCalledOnce()
+    const second = fakeCommandTab()
+    harness.profilesService.openNewTabForProfile.mockResolvedValue(second.tab)
+    expect((await harness.gatekeeper.runAuthorizedSshCommand({
+      ...harness.request, requestId: REQUEST_B,
+    })).ok).toBe(true)
+    expect(second.tab.destroy).not.toHaveBeenCalled()
+  })
+
+  it.each(['timeout', 'cancel', 'output-limit', 'connection-failure', 'manual-close'])(
+    'keeps the session on %s without confirmed completion', async outcome => {
+      const harness = await commandCloseHarness(() => 'after-completion', {
+        complete: false, output: outcome === 'output-limit' ? 'x'.repeat(5000) : 'running\n',
+      })
+      if (outcome === 'connection-failure') {
+        harness.profilesService.openNewTabForProfile.mockRejectedValueOnce(new Error('failed'))
+      }
+      const controller = new AbortController()
+      const pending = harness.gatekeeper.runAuthorizedSshCommand({
+        ...harness.request, signal: controller.signal,
+      })
+      if (outcome !== 'connection-failure') {
+        await vi.waitFor(() => expect(harness.commandTab.sent).toHaveLength(1))
+        if (outcome === 'cancel') {
+          controller.abort()
+        } else if (outcome === 'manual-close') {
+          harness.commandTab.tab.destroy()
+        } else {
+          harness.advance(45_000)
+        }
+      }
+      const result = await pending
+      expect(result).toMatchObject(outcome === 'connection-failure'
+        ? { ok: false, code: 'target_unavailable' }
+        : outcome === 'cancel' || outcome === 'manual-close'
+          ? { ok: false }
+          : { ok: true, truncated: true })
+      expect(harness.commandTab.tab.destroy).toHaveBeenCalledTimes(outcome === 'manual-close' ? 1 : 0)
+      expect(harness.commandTab.subscriptions.active).toBe(0)
+    },
+  )
+
+  it.each(['synchronous', 'asynchronous'])('keeps the result on %s close failure without leaking details', async failure => {
+    const harness = await commandCloseHarness(() => 'after-completion')
+    harness.commandTab.tab.destroy.mockImplementation(() => {
+      if (failure === 'asynchronous') {
+        return Promise.reject(new Error(SECRET_OPTIONS.password))
+      }
+      throw new Error(SECRET_OPTIONS.password)
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      expect(await harness.gatekeeper.runAuthorizedSshCommand(harness.request)).toMatchObject({
+        ok: true, output: 'files\n', truncated: false,
+      })
+      expect(warn).toHaveBeenCalledOnce()
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET_OPTIONS.password)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('does not auto-close sessions created by the open-profile tool', async () => {
+    const harness = await commandCloseHarness(() => 'after-completion')
+    expect(await harness.gatekeeper.requestOpen(openRequest(harness, {
+      profileRef: harness.request.profileRef,
+    }))).toEqual({ ok: true, status: 'opened' })
+    expect(harness.commandTab.tab.destroy).not.toHaveBeenCalled()
+  })
+})

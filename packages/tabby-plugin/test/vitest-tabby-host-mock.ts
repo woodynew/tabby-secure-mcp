@@ -1,17 +1,29 @@
 import { vi } from 'vitest'
 
+vi.mock('@tabby-secure-mcp/companion', () => ({ APPROVAL_WINDOW_MS: 60_000, CredentialStore: class {}, EmbeddedMcpServer: class {} }))
+
 vi.mock('tabby-core', () => {
   class ProfilesService {
     getProfiles = async () => []
   }
+  class AppService { closeTab = async () => undefined }
+  class HostWindowService { bringToFront() {} }
   class ConfigService {
     store: Record<string, unknown> = {}
     save = async () => undefined
   }
   class ConfigProvider {}
   class BootstrapData {}
+  class LocaleService {}
+  class TranslateService {}
+  class TabbyCoreModule {}
   return {
+    default: TabbyCoreModule,
+    LocaleService,
+    TranslateService,
     ProfilesService,
+    AppService,
+    HostWindowService,
     ConfigService,
     ConfigProvider,
     BootstrapData,

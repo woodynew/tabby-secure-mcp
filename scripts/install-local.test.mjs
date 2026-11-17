@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, symlink, stat, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, stat, rm } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { resolveNpmLauncher } from './npm-pack-utils.mjs'
+import { resolveNpmLauncher, runCommand } from './npm-pack-utils.mjs'
 
 import {
   PLUGIN_PACKAGE_NAME,
@@ -16,7 +16,6 @@ import {
   assertSafeAbsolutePluginsDir,
   assessRuntimeCleanupSafety,
   cleanStaleRuntimeArtifacts,
-  companionBinPath,
   listInstallerMetadataPaths,
   parseCliArgs,
   parseDescriptorBounded,
@@ -196,7 +195,7 @@ describe('assessRuntimeCleanupSafety', () => {
     await expect(stat(paths.descriptorPath)).resolves.toBeDefined()
   })
 
-  it('cleans stale descriptor, lock, and unix socket when PIDs are dead', async () => {
+  it('preserves stale descriptor, lock, and unix socket when PIDs are dead', async () => {
     const paths = await makePaths()
     const nonce = Buffer.alloc(32, 3).toString('base64url')
     await writeFile(paths.lockPath, JSON.stringify({ pid: 1, owner: 'stale' }))
@@ -220,23 +219,31 @@ describe('assessRuntimeCleanupSafety', () => {
 
     await cleanStaleRuntimeArtifacts(paths, { platform: 'linux' })
 
-    await expect(stat(paths.descriptorPath)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(stat(paths.lockPath)).rejects.toMatchObject({ code: 'ENOENT' })
-    await expect(stat(paths.endpoint)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(paths.descriptorPath)).resolves.toBeDefined()
+    await expect(stat(paths.lockPath)).resolves.toBeDefined()
+    await expect(stat(paths.endpoint)).resolves.toBeDefined()
   })
 })
 
 describe('installer metadata', () => {
-  it('rejects synthetic hidden package-lock file references', async () => {
+  it('preserves unrelated local dependencies and npm metadata', async () => {
     const pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-metadata-'))
     await mkdir(path.join(pluginsDir, 'node_modules'), { recursive: true })
     await writeFile(
       path.join(pluginsDir, 'node_modules', '.package-lock.json'),
       JSON.stringify({ dependencies: { demo: 'file:/tmp/evil.tgz' } }),
     )
-    await expect(assertNoTransientInstallerReferences(pluginsDir)).rejects.toThrow(/file:/i)
-    await removeTransientInstallerMetadata(pluginsDir)
     await expect(assertNoTransientInstallerReferences(pluginsDir)).resolves.toBeUndefined()
+    await removeTransientInstallerMetadata(pluginsDir)
+    await expect(stat(path.join(pluginsDir, 'node_modules', '.package-lock.json'))).resolves.toBeDefined()
+  })
+
+  it('allows a registered legacy companion dependency without rewriting it', async () => {
+    const pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-legacy-companion-'))
+    const manifest = { private: true, dependencies: { [COMPANION_PACKAGE_NAME]: 'file:/legacy/companion.tgz' } }
+    await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify(manifest))
+    await expect(assertNoTransientInstallerReferences(pluginsDir)).resolves.toBeUndefined()
+    expect(JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8'))).toEqual(manifest)
   })
 
   it('includes hidden node_modules lock in metadata scan paths', () => {
@@ -276,42 +283,137 @@ describe('runInstall smoke', () => {
     }
   })
 
-  it('packs, installs offline into a temp prefix, and runs companion --help', async () => {
+  it('installs only the self-contained plugin and preserves later package maintenance', async () => {
     const npm = resolveNpmLauncher()
-    const build = spawnSync(npm.command, ['run', 'build'], {
+    const build = spawnSync(npm.command, [...(npm.args ?? []), 'run', 'build'], {
       cwd: repoRoot,
       encoding: 'utf8',
       shell: npm.shell,
     })
     expect(build.status).toBe(0)
 
-    pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-plugins-smoke-'))
+    pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby plugins & smoke-'))
     runtimeParent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-smoke-'))
+    await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify({ private: true, name: 'qa-plugin-root', custom: { keep: true } }))
 
     const packDir = await mkdtemp(path.join(tmpdir(), 'tabby-pack-smoke-'))
     const result = await runInstall({
       argv: ['--plugins-dir', pluginsDir, '--skip-build'],
-      env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent },
       platform: 'linux',
       packDir,
       keepPackDir: true,
+      // Installation must register dependencies even when npm's user default disables saving.
+      env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent, npm_config_save: 'false' },
     })
 
     expect(result.pluginsDir).toBe(path.resolve(pluginsDir))
     await verifyInstalledLayout(pluginsDir, { platform: 'linux' })
     await assertNoTransientInstallerReferences(pluginsDir)
     await expect(stat(result.pluginPack.tarballPath)).resolves.toBeDefined()
-    await expect(stat(result.companionPack.tarballPath)).resolves.toBeDefined()
+    expect(await readdir(packDir)).toEqual(['tabby-secure-mcp-0.1.0.tgz'])
+    expect(result).not.toHaveProperty('companionPack')
+    expect(result).not.toHaveProperty('companionCommand')
+    expect(result.connectionInstructions).toMatch(/HTTP|127\.0\.0\.1/)
+    await expect(stat(path.join(pluginsDir, 'node_modules', '@tabby-secure-mcp', 'companion'))).rejects.toMatchObject({ code: 'ENOENT' })
 
     await rm(packDir, { recursive: true, force: true })
     await assertNoTransientInstallerReferences(pluginsDir)
+    const manifest = JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8'))
+    for (const name of [PLUGIN_PACKAGE_NAME]) {
+      expect(manifest.dependencies[name]).toMatch(/^file:.*\.secure-mcp-artifacts/)
+    }
 
-    const help = spawnSync(result.companionCommand, ['--help'], {
-      encoding: 'utf8',
-      shell: process.platform === 'win32',
+    const otherSource = path.join(runtimeParent, 'other plugin source')
+    await mkdir(otherSource)
+    await writeFile(path.join(otherSource, 'package.json'), JSON.stringify({ name: 'tabby-qa-other', version: '1.0.0', keywords: ['tabby-plugin'] }))
+    await runCommand('npm', ['pack', '--pack-destination', runtimeParent], { cwd: otherSource })
+    await runCommand('npm', ['install', '--prefix', pluginsDir, '--ignore-scripts', '--legacy-peer-deps', '--save', '--save-exact', path.join(runtimeParent, 'tabby-qa-other-1.0.0.tgz')])
+    await verifyInstalledLayout(pluginsDir)
+    await runInstall({ argv: ['--plugins-dir', pluginsDir, '--skip-build'], env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent }, platform: 'linux' })
+    await verifyInstalledLayout(pluginsDir)
+    await expect(stat(path.join(pluginsDir, 'node_modules', 'tabby-qa-other', 'package.json'))).resolves.toBeDefined()
+    expect(JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8')).custom).toEqual({ keep: true })
+
+    const legacySource = path.join(runtimeParent, 'legacy companion source')
+    await mkdir(legacySource)
+    await writeFile(path.join(legacySource, 'package.json'), JSON.stringify({ name: COMPANION_PACKAGE_NAME, version: EXPECTED_VERSION }))
+    await runCommand('npm', ['pack', '--pack-destination', runtimeParent], { cwd: legacySource })
+    const legacyTarball = path.join(runtimeParent, 'tabby-secure-mcp-companion-0.1.0.tgz')
+    await runCommand('npm', ['install', '--prefix', pluginsDir, '--ignore-scripts', '--legacy-peer-deps', '--save', '--save-exact', legacyTarball])
+    const legacyReference = JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8')).dependencies[COMPANION_PACKAGE_NAME]
+    const runtimeDir = path.join(runtimeParent, 'tabby-secure-mcp')
+    await mkdir(runtimeDir)
+    const staleLock = JSON.stringify({ pid: 999999, owner: 'legacy-owner' })
+    await writeFile(path.join(runtimeDir, 'companion.lock'), staleLock)
+    const cli = spawnSync(process.execPath, [path.join(repoRoot, 'scripts/install-local.mjs'), '--plugins-dir', pluginsDir, '--skip-build'], {
+      cwd: repoRoot, encoding: 'utf8', shell: false,
+      env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent, npm_config_save: 'false' },
     })
-    expect(help.status).toBe(0)
-    expect(help.stdout).toMatch(/tabby-secure-mcp/)
+    expect(cli.status, cli.stderr).toBe(0)
+    expect(cli.stdout).toContain(pluginsDir)
+    expect(cli.stdout).toMatch(/Streamable HTTP/)
+    expect(cli.stdout).toMatch(/Legacy companion.*retained/i)
+    expect(cli.stdout).toMatch(/disable.*stdio/i)
+    expect(cli.stdout).not.toMatch(/node_modules[/\\]\.bin|dist[/\\]cli\.js/)
+    expect(JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8')).dependencies[COMPANION_PACKAGE_NAME]).toBe(legacyReference)
+    await expect(stat(path.join(pluginsDir, 'node_modules', '@tabby-secure-mcp', 'companion', 'package.json'))).resolves.toBeDefined()
+    expect(await readFile(path.join(runtimeDir, 'companion.lock'), 'utf8')).toBe(staleLock)
+    await verifyInstalledLayout(pluginsDir)
+    await assertNoTransientInstallerReferences(pluginsDir)
+
+  }, 120_000)
+
+  it.each([
+    ['devDependencies', { NODE_ENV: 'production' }],
+    ['devDependencies', { npm_config_omit: 'dev' }],
+    ['devDependencies', { NODE_ENV: 'production', npm_config_omit: 'dev' }],
+    ['optionalDependencies', { npm_config_omit: 'optional' }],
+  ])('preserves a registered %s plugin under omit environment %j', async (section, omitEnv) => {
+    pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby plugins & omit-'))
+    runtimeParent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-omit-'))
+    const otherSource = path.join(runtimeParent, 'other plugin source')
+    await mkdir(otherSource)
+    const otherManifest = { name: 'tabby-qa-registered', version: '1.0.0', keywords: ['tabby-plugin'], main: 'index.js' }
+    const otherCode = 'module.exports = { preserved: true }\n'
+    await writeFile(path.join(otherSource, 'package.json'), JSON.stringify(otherManifest))
+    await writeFile(path.join(otherSource, 'index.js'), otherCode)
+    await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify({ private: true, custom: { keep: true } }))
+    await runCommand('npm', ['pack', '--pack-destination', runtimeParent], { cwd: otherSource })
+    await runCommand('npm', [
+      'install', '--prefix', pluginsDir, '--ignore-scripts', '--legacy-peer-deps',
+      '--include=dev', '--include=optional', '--save', '--save-exact',
+      section === 'devDependencies' ? '--save-dev' : '--save-optional',
+      path.join(runtimeParent, 'tabby-qa-registered-1.0.0.tgz'),
+    ])
+    const before = JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8'))
+    const installedOther = path.join(pluginsDir, 'node_modules', otherManifest.name)
+    expect(await readFile(path.join(installedOther, 'index.js'), 'utf8')).toBe(otherCode)
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await runInstall({
+        argv: ['--plugins-dir', pluginsDir, '--skip-build'],
+        platform: 'linux',
+        env: { ...process.env, ...omitEnv, XDG_RUNTIME_DIR: runtimeParent, npm_config_save: 'false' },
+      })
+      const after = JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8'))
+      expect(after[section]).toEqual(before[section])
+      expect(after.custom).toEqual(before.custom)
+      expect(after.dependencies[otherManifest.name]).toBeUndefined()
+      expect(after.dependencies[PLUGIN_PACKAGE_NAME]).toMatch(/^file:.*\.secure-mcp-artifacts/)
+      expect(JSON.parse(await readFile(path.join(installedOther, 'package.json'), 'utf8'))).toEqual(otherManifest)
+      expect(await readFile(path.join(installedOther, 'index.js'), 'utf8')).toBe(otherCode)
+    }
+  }, 120_000)
+
+  it('refuses to prune an existing unregistered Tabby plugin', async () => {
+    pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-existing-'))
+    runtimeParent = await mkdtemp(path.join(tmpdir(), 'tabby-runtime-smoke-'))
+    const old = path.join(pluginsDir, 'node_modules', 'tabby-existing', 'package.json')
+    await mkdir(path.dirname(old), { recursive: true })
+    const bytes = JSON.stringify({ name: 'tabby-existing', version: '1.0.0', keywords: ['tabby-plugin'] })
+    await writeFile(old, bytes)
+    await expect(runInstall({ argv: ['--plugins-dir', pluginsDir, '--skip-build'], env: { ...process.env, XDG_RUNTIME_DIR: runtimeParent } })).rejects.toThrow(/unregistered/i)
+    expect(await readFile(old, 'utf8')).toBe(bytes)
   }, 120_000)
 })
 
@@ -332,22 +434,11 @@ describe('parseDescriptorBounded', () => {
   })
 })
 
-describe('companionBinPath', () => {
-  it('uses .cmd on Windows', () => {
-    const pluginsDir = 'C:\\Tabby\\plugins'
-    expect(companionBinPath(pluginsDir, 'win32')).toBe(
-      path.win32.join(pluginsDir, 'node_modules', '.bin', 'tabby-secure-mcp.cmd'),
-    )
-  })
-})
-
 describe('verifyInstalledLayout', () => {
-  it('checks package names, versions, and required files', async () => {
+  it('checks the plugin alone without a companion directory or bin', async () => {
     const pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-plugins-verify-'))
     const pluginRoot = path.join(pluginsDir, 'node_modules', PLUGIN_PACKAGE_NAME)
-    const companionRoot = path.join(pluginsDir, 'node_modules', '@tabby-secure-mcp', 'companion')
     await mkdir(path.join(pluginRoot, 'dist'), { recursive: true })
-    await mkdir(path.join(companionRoot, 'dist'), { recursive: true })
     await writeFile(
       path.join(pluginRoot, 'package.json'),
       JSON.stringify({
@@ -358,14 +449,7 @@ describe('verifyInstalledLayout', () => {
         author: 'tabby-secure-mcp',
       }),
     )
-    await writeFile(
-      path.join(companionRoot, 'package.json'),
-      JSON.stringify({ name: COMPANION_PACKAGE_NAME, version: EXPECTED_VERSION }),
-    )
-    await writeFile(path.join(pluginRoot, 'dist', 'index.js'), 'module.exports = {}')
-    await writeFile(path.join(companionRoot, 'dist', 'cli.js'), '#!/usr/bin/env node\n')
-    await mkdir(path.join(pluginsDir, 'node_modules', '.bin'), { recursive: true })
-    await writeFile(path.join(pluginsDir, 'node_modules', '.bin', 'tabby-secure-mcp'), '')
+    await writeFile(path.join(pluginRoot, 'dist', 'index.js'), 'if(typeof module === "object") module.exports = {}; else if (define.amd) define([], () => ({}));')
 
     await expect(verifyInstalledLayout(pluginsDir, { platform: 'linux' })).resolves.toBeUndefined()
   })
