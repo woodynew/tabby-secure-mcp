@@ -4,6 +4,9 @@ A Tabby plugin hosting a local MCP service for explicitly authorized SSH access.
 AI clients can open SSH tabs, execute approved commands and, when separately enabled,
 transfer files. Each client has its own credential and permissions.
 
+Install it from **Tabby → Settings → Plugins**, then restart Tabby.
+Use **Settings → Secure MCP** in the main window to configure the service.
+
 - [Setup and usage](https://github.com/woodynew/tabby-secure-mcp#quick-start)
 - [Security policy and private vulnerability reporting](https://github.com/woodynew/tabby-secure-mcp/security/policy)
 - [Security boundaries](https://github.com/woodynew/tabby-secure-mcp#security-scope-and-limitations)
