@@ -52,7 +52,7 @@ export class NodeAuditFileSystem implements AuditFileSystem {
     const entry = noFollow ? undefined : await lstat(file, { bigint: true })
     if (entry && (!entry.isFile() || entry.ino === 0n)) throw new Error('unsafe audit segment')
 
-    const handle = await open(file, constants.O_RDONLY | noFollow | (constants.O_NONBLOCK ?? 0)).catch((error: NodeJS.ErrnoException) => {
+    const handle = await open(file, constants.O_RDONLY | noFollow | (constants.O_NONBLOCK ?? 0), 0o600).catch((error: NodeJS.ErrnoException) => {
       // A replaced entry can produce ENOENT by pointing to a missing target.
       if (entry && error.code === 'ENOENT') throw new Error('unsafe audit segment')
       throw error

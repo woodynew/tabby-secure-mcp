@@ -197,23 +197,30 @@ function isPathInsideDirectory(candidate, directory, platform) {
 }
 
 async function withRegularArtifact(filePath, read) {
-  const before = await lstat(filePath, { bigint: true })
-  if (before.isSymbolicLink()) return { kind: 'symlink' }
-  if (!before.isFile()) return { kind: 'unsafe' }
-
   let file
   try {
-    file = await open(filePath, ARTIFACT_READ_FLAGS)
+    file = await open(filePath, ARTIFACT_READ_FLAGS, 0o600)
   } catch (error) {
     if (error?.code === 'ELOOP') return { kind: 'symlink' }
-    if (error?.code === 'ENOENT') return { kind: 'unsafe' }
+    // Some platforms return an open error for directories or dangling links.
+    if (['ENOENT', 'EISDIR', 'EPERM'].includes(error?.code)) {
+      const entry = await lstat(filePath).catch(statError => {
+        if (statError?.code !== 'ENOENT') throw statError
+      })
+      if (entry?.isSymbolicLink()) return { kind: 'symlink' }
+      if (entry && (!entry.isFile() || error?.code === 'ENOENT')) return { kind: 'unsafe' }
+    }
     throw error
   }
 
   try {
     const info = await file.stat({ bigint: true })
-    // The file ID check also covers platforms without O_NOFOLLOW.
-    if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) {
+    const entry = await lstat(filePath, { bigint: true }).catch(error => {
+      if (error?.code !== 'ENOENT') throw error
+    })
+    if (entry?.isSymbolicLink()) return { kind: 'symlink' }
+    // Compare the open handle to the current entry before reading from it.
+    if (!info.isFile() || !entry?.isFile() || info.dev !== entry.dev || info.ino !== entry.ino || info.ino === 0n) {
       return { kind: 'unsafe' }
     }
     return await read(file, Number(info.size))
