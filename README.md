@@ -178,6 +178,12 @@ The installer retains checksum-named tarballs in `.secure-mcp-artifacts` and reg
 
 Private named credentials live beside the audit root in `http-credentials.json`, using existing XDG_CONFIG_HOME / LOCALAPPDATA overrides. Do not edit it manually or relax its permissions. Failed revocations stay denied for the running instance; retry persistence before restarting. Corrupt files, unsafe permissions or unresolved credential updates fail closed and preserve evidence.
 
+## Feedback and contributions
+
+Report ordinary bugs or suggest changes through [GitHub Issues](https://github.com/woodynew/tabby-secure-mcp/issues).
+See [Contributing](CONTRIBUTING.md) for the pull request process and
+[Security policy](SECURITY.md) for private vulnerability reporting.
+
 ## Verification and status
 
 ```bash
