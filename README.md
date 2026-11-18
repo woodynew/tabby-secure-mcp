@@ -39,6 +39,9 @@ Client configuration contains a private bearer token: do not commit or share it.
 
 ## Seven tools
 
+See the [MCP interface reference](docs/mcp-api.md) for request and result
+fields, permission requirements, and error handling.
+
 | Tool | Result |
 | --- | --- |
 | list_authorized_ssh_profiles | Minimal references/display names for whitelisted SSH profiles |
