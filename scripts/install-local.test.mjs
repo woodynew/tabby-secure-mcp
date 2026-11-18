@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, writeFile, readFile, readdir, symlink, stat, rm } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -186,13 +187,25 @@ describe('assessRuntimeCleanupSafety', () => {
 
   it('blocks on symlinked descriptor without deleting artifacts', async () => {
     const paths = await makePaths()
-    const outside = await mkdtemp(path.join(tmpdir(), 'tabby-outside-'))
-    await writeFile(path.join(outside, 'real.json'), '{}')
-    await symlink(path.join(outside, 'real.json'), paths.descriptorPath)
+    const outside = path.join(runtimeParent, 'real.json')
+    await writeFile(outside, '{}')
+    await symlink(outside, paths.descriptorPath)
     const state = await assessRuntimeCleanupSafety(paths, { platform: 'linux', isProcessAlive: () => false })
     expect(state.status).toBe('blocked')
+    expect(state.message).toMatch(/symbolic link/i)
     await cleanStaleRuntimeArtifacts(paths, { platform: 'linux' })
     await expect(stat(paths.descriptorPath)).resolves.toBeDefined()
+  })
+
+  it.each(['descriptorPath', 'lockPath'])('blocks when %s is a directory', async (artifact) => {
+    const paths = await makePaths()
+    await mkdir(paths[artifact])
+    const state = await assessRuntimeCleanupSafety(paths, {
+      platform: 'linux',
+      isProcessAlive: () => false,
+    })
+    expect(state.status).toBe('blocked')
+    expect(state.message).toMatch(/malformed/i)
   })
 
   it('preserves stale descriptor, lock, and unix socket when PIDs are dead', async () => {
@@ -244,6 +257,28 @@ describe('installer metadata', () => {
     await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify(manifest))
     await expect(assertNoTransientInstallerReferences(pluginsDir)).resolves.toBeUndefined()
     expect(JSON.parse(await readFile(path.join(pluginsDir, 'package.json'), 'utf8'))).toEqual(manifest)
+  })
+
+  it('checks persistent artifact contents and the packed byte count', async () => {
+    const pluginsDir = await mkdtemp(path.join(tmpdir(), 'tabby-artifact-'))
+    try {
+      const data = Buffer.alloc(128 * 1024 + 1, 1)
+      const hash = createHash('sha256').update(data).digest('hex')
+      const reference = `.secure-mcp-artifacts/${hash}.tgz`
+      const artifact = path.join(pluginsDir, reference)
+      await mkdir(path.dirname(artifact))
+      await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify({
+        dependencies: { [PLUGIN_PACKAGE_NAME]: `file:${reference}` },
+      }))
+      await writeFile(artifact, data)
+      await expect(assertNoTransientInstallerReferences(pluginsDir)).resolves.toBeUndefined()
+      await expect(assertNoTransientInstallerReferences(pluginsDir, data.length)).resolves.toBeUndefined()
+      await expect(assertNoTransientInstallerReferences(pluginsDir, data.length - 1)).rejects.toThrow(/checksum mismatch/i)
+      await writeFile(artifact, data.fill(2))
+      await expect(assertNoTransientInstallerReferences(pluginsDir, data.length)).rejects.toThrow(/checksum mismatch/i)
+    } finally {
+      await rm(pluginsDir, { recursive: true, force: true })
+    }
   })
 
   it('includes hidden node_modules lock in metadata scan paths', () => {

@@ -21,14 +21,17 @@ must be checked on an actually published version; preparing a workflow does not 
 
 ## Quick start
 
-1. From the repaired source workspace, install/build the plugin:
+1. Install the plugin. In **Tabby → Settings → Plugins**, search for
+   `tabby-secure-mcp` once it is available there. See the
+   [v0.1.0 release notes](docs/releases/v0.1.0.md) for the first release.
+   To build and install from a source checkout instead, run:
 
    ```bash
    npm ci
    npm run install:local
    ```
 
-   The installer uses your platform's Tabby plugins directory. To override it, pass `-- --plugins-dir "/absolute/plugins/path"`. Only one self-contained plugin package is installed. Node is needed for building/installing from source, not for AI clients to run the installed service.
+   The installer uses your platform's Tabby plugins directory. To override it, pass `-- --plugins-dir "/absolute/plugins/path"`. Use a directory under your control. Only one self-contained plugin package is installed. Node is needed for building/installing from source, not for AI clients to run the installed service.
 
 2. Restart Tabby. In the **main window → Settings → Secure MCP**, select only the SSH profiles you want to expose and choose their command approval modes. Start with a dedicated test account and **Request approval**.
 3. Enter a **credential name**, click **Add client**, and copy that client's MCP configuration. Use a separate credential for each connection client; names can be edited without changing grants.

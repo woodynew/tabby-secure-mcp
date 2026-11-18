@@ -1,8 +1,9 @@
 # npm release preparation
 
-**Preparation only:** this change does not publish a package, create a release tag,
-configure an npm account or establish package provenance. The intended public package
-is `tabby-secure-mcp`; the root workspace and both internal libraries remain private.
+The first planned public release is **`tabby-secure-mcp@0.1.0`**, with Git tag
+**`v0.1.0`**. Use the [v0.1.0 release notes](releases/v0.1.0.md) when publishing
+the matching GitHub Release. The root workspace and the two internal libraries are
+private.
 
 ## What is prepared
 
@@ -26,10 +27,30 @@ and its version-specific fixtures; they are not automated by this work.
 ## Account setup deferred until the first authorized release
 
 At preparation time, the public npm registry returns 404 for `tabby-secure-mcp`.
-An existing package is needed to configure its Trusted Publisher settings. Therefore
-the workflow alone does not solve the initial package-creation/bootstrap step.
-The npm owner must arrange that first authenticated publication separately, with
-explicit release authorization; no bootstrap token or first publish is created here.
+An existing package is needed to configure its Trusted Publisher settings.
+The [release script](../scripts/release.sh) handles that first authenticated
+publication. From a clean `main` that matches the official remote, run
+`npm login --registry=https://registry.npmjs.org` if needed. After reviewing
+the first release candidate, run `bash scripts/release.sh --publish`. It verifies
+that the package name is still unregistered, publishes the checked tarball, and
+checks the registry version, `latest` tag, and tarball integrity. This initial
+publication uses the local npm account. The Trusted Publisher workflow supplies
+provenance for later versions.
+
+### First publication checklist
+
+1. Confirm that `main` contains the reviewed candidate, CI is green, and the
+   checked-in [release notes](releases/v0.1.0.md) describe that candidate. Review
+   the current [security findings](security-baseline.md) and host acceptance.
+2. Verify the account with `npm whoami --registry=https://registry.npmjs.org`.
+   Sign in with the intended npm publisher account and complete its 2FA if prompted.
+3. Run `bash scripts/release.sh` on a clean `main`, then run
+   `bash scripts/release.sh --publish` when the first public release is authorized.
+   Record the exact source commit and the registry integrity that the script prints.
+4. Create `v0.1.0` on that source commit and publish the matching GitHub Release
+   with the release notes above. Verify that npm lists `0.1.0` as `latest` and
+   that Tabby discovers or can install the package.
+
 Before using the prepared OIDC workflow, configure these exact values on npm:
 
 | Trusted Publisher field | Value |
@@ -56,23 +77,19 @@ Authentication failure must stop the release; do not fall back to token publishi
 From the repository root:
 
 ```sh
-npm ci --registry=https://registry.npmjs.org --no-audit
-npm run typecheck
-npm test
-npm run test:integration
-npm run build
-npm run pack:check
-npm publish --workspace=packages/tabby-plugin --dry-run --access=public --registry=https://registry.npmjs.org
+bash scripts/release.sh
 ```
 
-These checks do not publish, authenticate an OIDC publisher or generate provenance.
-Review [known dependency findings](security-baseline.md) and current scan results
-before authorizing an actual release. No dependency upgrades or vulnerability
-dispositions are implied by passing the build/tests.
+Check mode runs a clean install, type checking, template compilation, tests,
+integration tests, build, and a lockfile-wide npm audit. It validates the one
+plugin tarball and runs an npm publish dry run on that exact file. Check mode
+runs without npm login. A failed audit request stops the script. Audit findings
+are reported separately so the maintainer can evaluate
+[known dependency findings](security-baseline.md) before authorizing publication.
 
-## Actual publication: a later, explicitly authorized operation
+## Subsequent publication through GitHub Actions
 
-After this workflow is merged into `main`, the npm bootstrap/setup is resolved and
+After the npm bootstrap and Trusted Publisher setup are complete and
 the release candidate is approved, create its version tag on an included `main`
 commit. Dispatch using that tag, for example:
 

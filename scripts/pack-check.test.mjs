@@ -85,6 +85,7 @@ describe('single self-contained plugin tarball', () => {
     await writeMinimalTgz(path.join(packDir, 'tabby-secure-mcp-0.1.0.tgz'), {
       'package/package.json': JSON.stringify({ name: 'tabby-secure-mcp', version: EXPECTED_VERSION, author: 'test', keywords: [TABBY_PLUGIN_KEYWORD], main: 'dist/index.js' }),
       'package/dist/index.js': bundle,
+      'package/LICENSE': 'MIT License',
       'package/README.md': 'See https://github.com/woodynew/tabby-secure-mcp/security/policy',
     })
     try {
@@ -135,7 +136,9 @@ describe('inspectPackedTarball integration', () => {
       expect(manifest.homepage).toBe('https://github.com/woodynew/tabby-secure-mcp#readme')
       expect(manifest.publishConfig).toEqual({ access: 'public', registry: 'https://registry.npmjs.org' })
       expect(result.plugin.version).toBe(EXPECTED_VERSION)
-      expect(result.plugin.entries.sort()).toEqual(['README.md', 'dist/index.js', 'package.json'])
+      expect(result.plugin.entries.sort()).toEqual(['LICENSE', 'README.md', 'dist/index.js', 'package.json'])
+      expect(await readFile(path.join(repoRoot, 'packages/tabby-plugin/LICENSE'), 'utf8'))
+        .toBe(await readFile(path.join(repoRoot, 'LICENSE'), 'utf8'))
       expect(result.plugin.bundle).toMatch(/webpackUniversalModuleDefinition|module\.exports/)
       expect(Object.keys(result)).toEqual(['plugin'])
       const readme = await readFile(path.join(repoRoot, 'packages/tabby-plugin/README.md'), 'utf8')

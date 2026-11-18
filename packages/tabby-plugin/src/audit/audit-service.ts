@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core'
 import { randomBytes } from 'node:crypto'
-import { chmod, lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { chmod, lstat, mkdir, open, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import {
@@ -46,9 +47,40 @@ export class NodeAuditFileSystem implements AuditFileSystem {
   }
 
   async readFile(file: string, encoding: 'utf8'): Promise<string> {
-    const info = await lstat(file)
-    if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_AUDIT_SEGMENT_BYTES) throw new Error('unsafe audit segment')
-    return readFile(file, encoding)
+    const noFollow = constants.O_NOFOLLOW ?? 0
+    // Without O_NOFOLLOW, require the handle to match the regular directory entry.
+    const entry = noFollow ? undefined : await lstat(file, { bigint: true })
+    if (entry && (!entry.isFile() || entry.ino === 0n)) throw new Error('unsafe audit segment')
+
+    const handle = await open(file, constants.O_RDONLY | noFollow | (constants.O_NONBLOCK ?? 0)).catch((error: NodeJS.ErrnoException) => {
+      // A replaced entry can produce ENOENT by pointing to a missing target.
+      if (entry && error.code === 'ENOENT') throw new Error('unsafe audit segment')
+      throw error
+    })
+    try {
+      const info = await handle.stat({ bigint: true })
+      if (!info.isFile() || info.size > MAX_AUDIT_SEGMENT_BYTES || (entry && (info.dev !== entry.dev || info.ino !== entry.ino))) {
+        throw new Error('unsafe audit segment')
+      }
+
+      // Read at most one extra byte to detect growth past the limit.
+      const readLimit = MAX_AUDIT_SEGMENT_BYTES + 1
+      let buffer = Buffer.allocUnsafe(Number(info.size) + 1)
+      let total = 0
+      while (true) {
+        const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total)
+        if (bytesRead === 0) return buffer.toString(encoding, 0, total)
+        total += bytesRead
+        if (total === readLimit) throw new Error('unsafe audit segment')
+        if (total === buffer.length) {
+          const expanded = Buffer.allocUnsafe(Math.min(buffer.length * 2, readLimit))
+          buffer.copy(expanded)
+          buffer = expanded
+        }
+      }
+    } finally {
+      await handle.close()
+    }
   }
   writeFile = writeFile
   rename = rename

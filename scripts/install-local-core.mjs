@@ -1,4 +1,5 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
 import path from 'node:path'
@@ -15,6 +16,7 @@ const MAX_DESCRIPTOR_BYTES = 4096
 const MAX_LOCK_BYTES = 4096
 const MAX_LOCK_OWNER_LENGTH = 128
 const PAIRING_NONCE_BYTES = 32
+const ARTIFACT_READ_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
 
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -194,42 +196,72 @@ function isPathInsideDirectory(candidate, directory, platform) {
   return rel === '' || (!rel.startsWith('..') && !pathApi.isAbsolute(rel))
 }
 
-async function readArtifactState(filePath) {
+async function withRegularArtifact(filePath, read) {
+  const before = await lstat(filePath, { bigint: true })
+  if (before.isSymbolicLink()) return { kind: 'symlink' }
+  if (!before.isFile()) return { kind: 'unsafe' }
+
+  let file
   try {
-    const fileStat = await lstat(filePath)
-    if (fileStat.isSymbolicLink()) {
-      return { kind: 'symlink' }
-    }
-    if (fileStat.size > MAX_DESCRIPTOR_BYTES) {
-      return { kind: 'oversize' }
-    }
-    const raw = await readFile(filePath, 'utf8')
-    return { kind: 'present', raw, size: fileStat.size }
+    file = await open(filePath, ARTIFACT_READ_FLAGS)
   } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') {
-      return { kind: 'missing' }
+    if (error?.code === 'ELOOP') return { kind: 'symlink' }
+    if (error?.code === 'ENOENT') return { kind: 'unsafe' }
+    throw error
+  }
+
+  try {
+    const info = await file.stat({ bigint: true })
+    // The file ID check also covers platforms without O_NOFOLLOW.
+    if (!info.isFile() || info.dev !== before.dev || info.ino !== before.ino) {
+      return { kind: 'unsafe' }
     }
+    return await read(file, Number(info.size))
+  } finally {
+    await file.close()
+  }
+}
+
+async function readArtifactState(filePath, maxBytes) {
+  try {
+    return await withRegularArtifact(filePath, async (file, size) => {
+      if (size > maxBytes) return { kind: 'oversize' }
+      const buffer = Buffer.alloc(maxBytes + 1)
+      let offset = 0
+      while (offset < buffer.length) {
+        const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset)
+        if (!bytesRead) break
+        offset += bytesRead
+      }
+      if (offset > maxBytes) return { kind: 'oversize' }
+      return { kind: 'present', raw: buffer.toString('utf8', 0, offset), size: offset }
+    })
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { kind: 'missing' }
     throw error
   }
 }
 
-async function readLockArtifactState(filePath) {
-  try {
-    const fileStat = await lstat(filePath)
-    if (fileStat.isSymbolicLink()) {
-      return { kind: 'symlink' }
+async function hashInstallerArtifact(filePath, expectedSize) {
+  return withRegularArtifact(filePath, async (file, size) => {
+    if (!Number.isSafeInteger(size) || (expectedSize !== undefined && size !== expectedSize)) {
+      return { kind: 'size-mismatch' }
     }
-    if (fileStat.size > MAX_LOCK_BYTES) {
-      return { kind: 'oversize' }
+    const hash = createHash('sha256')
+    const buffer = Buffer.alloc(Math.min(size + 1, 64 * 1024))
+    let offset = 0
+    // Read at most one byte past the measured size to detect growth.
+    while (offset <= size) {
+      const length = Math.min(buffer.length, size - offset + 1)
+      const { bytesRead } = await file.read(buffer, 0, length, offset)
+      if (!bytesRead) break
+      offset += bytesRead
+      if (offset > size) return { kind: 'size-mismatch' }
+      hash.update(buffer.subarray(0, bytesRead))
     }
-    const raw = await readFile(filePath, 'utf8')
-    return { kind: 'present', raw, size: fileStat.size }
-  } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') {
-      return { kind: 'missing' }
-    }
-    throw error
-  }
+    if (offset !== size) return { kind: 'size-mismatch' }
+    return { kind: 'present', hash: hash.digest('hex') }
+  })
 }
 
 function lockParseState(lockArtifact) {
@@ -239,7 +271,7 @@ function lockParseState(lockArtifact) {
   if (lockArtifact.kind === 'symlink') {
     return { shape: 'symlink' }
   }
-  if (lockArtifact.kind === 'oversize') {
+  if (lockArtifact.kind !== 'present') {
     return { shape: 'malformed' }
   }
   const parsed = parseLockBounded(lockArtifact.raw)
@@ -256,7 +288,7 @@ function descriptorParseState(descriptorArtifact) {
   if (descriptorArtifact.kind === 'symlink') {
     return { shape: 'symlink' }
   }
-  if (descriptorArtifact.kind === 'oversize') {
+  if (descriptorArtifact.kind !== 'present') {
     return { shape: 'malformed' }
   }
   const parsed = parseDescriptorBounded(descriptorArtifact.raw)
@@ -270,8 +302,8 @@ export async function assessRuntimeCleanupSafety(runtimePaths, deps = {}) {
   const platform = deps.platform ?? process.platform
   const isProcessAlive = deps.isProcessAlive ?? defaultProcessLivenessProbe
 
-  const descriptorArtifact = await readArtifactState(runtimePaths.descriptorPath)
-  const lockArtifact = await readLockArtifactState(runtimePaths.lockPath)
+  const descriptorArtifact = await readArtifactState(runtimePaths.descriptorPath, MAX_DESCRIPTOR_BYTES)
+  const lockArtifact = await readArtifactState(runtimePaths.lockPath, MAX_LOCK_BYTES)
   const descriptor = descriptorParseState(descriptorArtifact)
   const lock = lockParseState(lockArtifact)
 
@@ -378,7 +410,7 @@ export function listInstallerMetadataPaths(pluginsDir) {
 /** @deprecated Persistent dependencies require preserving npm metadata. */
 export async function removeTransientInstallerMetadata(_pluginsDir) {}
 
-export async function assertNoTransientInstallerReferences(pluginsDir) {
+export async function assertNoTransientInstallerReferences(pluginsDir, expectedArtifactSize) {
   const manifest = await readPluginsManifest(pluginsDir)
   for (const name of [PLUGIN_PACKAGE_NAME]) {
     const reference = manifest.dependencies?.[name]
@@ -387,10 +419,11 @@ export async function assertNoTransientInstallerReferences(pluginsDir) {
     const artifact = path.resolve(pluginsDir, reference.slice(5))
     const store = path.join(pluginsDir, '.secure-mcp-artifacts')
     if (path.dirname(artifact) !== store || !/^[a-f0-9]{64}\.tgz$/.test(path.basename(artifact))) throw new Error(`Unsafe file: dependency for ${name}`)
-    const info = await lstat(artifact)
-    if (!info.isFile() || info.isSymbolicLink()) throw new Error('Unsafe installer artifact')
-    const hash = createHash('sha256').update(await readFile(artifact)).digest('hex')
-    if (path.basename(artifact) !== `${hash}.tgz`) throw new Error('Installer artifact checksum mismatch')
+    const result = await hashInstallerArtifact(artifact, expectedArtifactSize)
+    if (result.kind === 'symlink' || result.kind === 'unsafe') throw new Error('Unsafe installer artifact')
+    if (result.kind !== 'present' || path.basename(artifact) !== `${result.hash}.tgz`) {
+      throw new Error('Installer artifact checksum mismatch')
+    }
   }
 }
 
@@ -436,10 +469,10 @@ async function persistTarball(pluginsDir, file) {
   const target = path.join(directory, `${hash}.tgz`)
   try { await writeFile(target, data, { flag: 'wx', mode: 0o600 }) } catch (error) {
     if (error?.code !== 'EEXIST') throw error
-    const info = await lstat(target)
-    if (!info.isFile() || info.isSymbolicLink() || createHash('sha256').update(await readFile(target)).digest('hex') !== hash) throw new Error('Installer artifact collision')
+    const existing = await hashInstallerArtifact(target, data.length)
+    if (existing.hash !== hash) throw new Error('Installer artifact collision')
   }
-  return target
+  return { target, size: data.length }
 }
 
 /** @deprecated Use assertNoTransientInstallerReferences */
@@ -496,7 +529,7 @@ export async function runInstall(options = {}) {
       env: options.env,
     })
     await mkdir(pluginsDir, { recursive: true })
-    const pluginArtifact = await persistTarball(pluginsDir, pluginPack.tarballPath)
+    const { target: pluginArtifact, size: artifactSize } = await persistTarball(pluginsDir, pluginPack.tarballPath)
     try { await writeFile(path.join(pluginsDir, 'package.json'), JSON.stringify({ private: true }, null, 2) + '\n', { flag: 'wx' }) } catch (error) { if (error?.code !== 'EEXIST') throw error }
     await runCommand(
       'npm',
@@ -522,7 +555,7 @@ export async function runInstall(options = {}) {
     for (const name of [PLUGIN_PACKAGE_NAME]) {
       if (!installedManifest.dependencies?.[name]) throw new Error(`Missing persistent dependency for ${name}`)
     }
-    await assertNoTransientInstallerReferences(pluginsDir)
+    await assertNoTransientInstallerReferences(pluginsDir, artifactSize)
 
     const warnings = []
     if (['dependencies', 'devDependencies', 'optionalDependencies'].some(section => installedManifest[section]?.[COMPANION_PACKAGE_NAME] !== undefined)) {
