@@ -74,6 +74,9 @@ The former profile-wide remembered-open grants are not inherited by clients. Exi
 
 ## First calls
 
+See the [MCP interface reference](mcp-api.md) for the arguments and
+structured result of each tool.
+
 Ask the AI tool to call these in order:
 
 1. `list_authorized_ssh_profiles` — only explicitly whitelisted names/references should appear.

@@ -2,6 +2,7 @@
 
 [![CodeQL](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/woodynew/tabby-secure-mcp/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/woodynew/tabby-secure-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/woodynew/tabby-secure-mcp)
+[![OpenSSF Baseline Level 1](https://www.bestpractices.dev/projects/16889/baseline)](https://www.bestpractices.dev/en/projects/16889/baseline-1)
 
 A Tabby plugin hosting a local Streamable HTTP MCP service. AI clients can list explicitly whitelisted SSH profiles, open and reuse visible SSH tabs, execute approved commands, and transfer files when separately enabled. The service runs inside Tabby; there is no standalone companion process or client-side Node command.
 
@@ -20,14 +21,17 @@ must be checked on an actually published version; preparing a workflow does not 
 
 ## Quick start
 
-1. From the repaired source workspace, install/build the plugin:
+1. Install the plugin. In **Tabby → Settings → Plugins**, search for
+   `tabby-secure-mcp` once it is available there. See the
+   [v0.1.0 release notes](docs/releases/v0.1.0.md) for the first release.
+   To build and install from a source checkout instead, run:
 
    ```bash
    npm ci
    npm run install:local
    ```
 
-   The installer uses your platform's Tabby plugins directory. To override it, pass `-- --plugins-dir "/absolute/plugins/path"`. Only one self-contained plugin package is installed. Node is needed for building/installing from source, not for AI clients to run the installed service.
+   The installer uses your platform's Tabby plugins directory. To override it, pass `-- --plugins-dir "/absolute/plugins/path"`. Use a directory under your control. Only one self-contained plugin package is installed. Node is needed for building/installing from source, not for AI clients to run the installed service.
 
 2. Restart Tabby. In the **main window → Settings → Secure MCP**, select only the SSH profiles you want to expose and choose their command approval modes. Start with a dedicated test account and **Request approval**.
 3. Enter a **credential name**, click **Add client**, and copy that client's MCP configuration. Use a separate credential for each connection client; names can be edited without changing grants.
@@ -37,6 +41,9 @@ must be checked on an actually published version; preparing a workflow does not 
 Client configuration contains a private bearer token: do not commit or share it. Copying is an explicit action; the plugin does not edit AI-tool configuration files.
 
 ## Seven tools
+
+See the [MCP interface reference](docs/mcp-api.md) for request and result
+fields, permission requirements, and error handling.
 
 | Tool | Result |
 | --- | --- |
@@ -177,6 +184,12 @@ MCP-created SSH tabs request a fresh transport without changing the stored profi
 The installer retains checksum-named tarballs in `.secure-mcp-artifacts` and registers the plugin as a stable root `file:` dependency. Keep the artifacts for later npm maintenance. Registered unrelated dependencies are preserved; unregistered existing plugins cause a preflight refusal. Old registered companion packages may remain inert, but old stdio client entries must be disabled manually. The installer never deletes runtime locks or automatically uninstalls unrelated packages.
 
 Private named credentials live beside the audit root in `http-credentials.json`, using existing XDG_CONFIG_HOME / LOCALAPPDATA overrides. Do not edit it manually or relax its permissions. Failed revocations stay denied for the running instance; retry persistence before restarting. Corrupt files, unsafe permissions or unresolved credential updates fail closed and preserve evidence.
+
+## Feedback and contributions
+
+Report ordinary bugs or suggest changes through [GitHub Issues](https://github.com/woodynew/tabby-secure-mcp/issues).
+See [Contributing](CONTRIBUTING.md) for the pull request process and
+[Security policy](SECURITY.md) for private vulnerability reporting.
 
 ## Verification and status
 

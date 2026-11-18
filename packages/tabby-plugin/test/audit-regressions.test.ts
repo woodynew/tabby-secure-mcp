@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises'
+import * as nodeFs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { AuditService, verifyAuditSegments, type AuditFileSystem } from '../src/audit/audit-service'
+import { AuditService, MAX_AUDIT_SEGMENT_BYTES, NodeAuditFileSystem, verifyAuditSegments, type AuditFileSystem } from '../src/audit/audit-service'
+
+vi.mock('node:fs/promises', async importOriginal => ({ ...await importOriginal<typeof import('node:fs/promises')>() }))
 
 function memoryFs() {
   const files = new Map<string, string>()
@@ -18,6 +21,55 @@ function memoryFs() {
 }
 
 describe('audit safety regressions', () => {
+  it('enforces the UTF-8 byte limit even with stale size metadata', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'audit-read-'))
+    try {
+      const fs = new NodeAuditFileSystem()
+      const file = path.join(dir, 'segment.jsonl')
+      const content = 'é'.repeat(MAX_AUDIT_SEGMENT_BYTES / 2)
+      await writeFile(file, content, 'utf8')
+      expect(await fs.readFile(file, 'utf8')).toBe(content)
+      await truncate(file, MAX_AUDIT_SEGMENT_BYTES + 1)
+      await expect(fs.readFile(file, 'utf8')).rejects.toThrow('unsafe audit segment')
+
+      const handle = await nodeFs.open(file, 'r')
+      const openSpy = vi.spyOn(nodeFs, 'open').mockResolvedValueOnce(handle)
+      try {
+        // Model stale size metadata without changing the file during the read.
+        const observed = await handle.stat({ bigint: true })
+        observed.size = BigInt(MAX_AUDIT_SEGMENT_BYTES - 1024)
+        vi.spyOn(handle, 'stat').mockResolvedValueOnce(observed)
+        await expect(fs.readFile(file, 'utf8')).rejects.toThrow('unsafe audit segment')
+        expect(handle.fd).toBe(-1)
+      } finally {
+        openSpy.mockRestore()
+        await handle.close()
+      }
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+
+  it('rejects a directory and preserves ENOENT for a missing segment', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'audit-read-'))
+    try {
+      const fs = new NodeAuditFileSystem()
+      await expect(fs.readFile(dir, 'utf8')).rejects.toThrow('unsafe audit segment')
+      await expect(fs.readFile(path.join(dir, 'missing.jsonl'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects segment symlinks even when their target is missing', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'audit-read-'))
+    try {
+      const file = path.join(dir, 'segment.jsonl')
+      const link = path.join(dir, 'link.jsonl')
+      await writeFile(file, 'segment\n', 'utf8')
+      await symlink(file, link)
+      await expect(new NodeAuditFileSystem().readFile(link, 'utf8')).rejects.toThrow()
+      await rm(file)
+      await expect(verifyAuditSegments([link])).rejects.toThrow()
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+
   it('flushes and verifies real disk segments with private file permissions', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'audit-disk-'))
     try {
