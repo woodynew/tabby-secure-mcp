@@ -92,7 +92,7 @@ Advisory references for independent verification:
   [suffix scheme injection](https://github.com/advisories/GHSA-333x-w4r6-6crp).
 - Babel: [source-map file read](https://github.com/advisories/GHSA-4x5r-pxfx-6jf8).
 
-## Disposition
+## Baseline disposition (2026-11-17)
 
 All findings remain **open for applicability review**. This change does not dismiss,
 accept as safe, suppress or fix them. Angular versions are constrained by the Tabby
@@ -107,3 +107,38 @@ in the plugin. Future assessments must record evidence for each relevant path.
 
 Before a formal release, review current CodeQL and dependency findings and record
 their dispositions. This preparation work does not declare a release safe.
+
+## Dependency fixes (2026-11-18)
+
+Using the same official registry and audit command, the pre-update lockfile
+reported **24 affected package entries** (13 high, 10 moderate, 1 low).
+The updated lockfile reports **21** (13 high, 8 moderate, 0 low). No critical
+entries were reported. Seven advisory IDs disappeared and none were added.
+
+| Dependency | Resolved version | Advisories cleared from this scan |
+| --- | --- | --- |
+| `vitest` and `@vitest/mocker` | `4.1.12` | [GHSA-qxg6-89mg-rqv8](https://github.com/advisories/GHSA-qxg6-89mg-rqv8), [GHSA-xp26-3454-mjgp](https://github.com/advisories/GHSA-xp26-3454-mjgp) |
+| `fast-uri` via `ajv` | `3.1.9` | [GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg), [GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h), [GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr), [GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp) |
+| `@babel/core` via `@angular/compiler-cli` and `@angular/localize` | `7.29.6` | [GHSA-4x5r-pxfx-6jf8](https://github.com/advisories/GHSA-4x5r-pxfx-6jf8) |
+
+- **Angular**: [Tabby 1.0.238](https://github.com/Eugeny/tabby/blob/v1.0.238/package.json)
+  uses Angular 15. The plugin loads Angular framework modules from the host and
+  keeps its Angular 15 compiler for compatibility. The Angular advisories above
+  remain open for applicability review. The install-time deprecation warnings
+  for `glob@8.1.0` and `inflight@1.0.6` come through `@angular/localize → glob → inflight`.
+- **picomatch**: the latest published `4.0.7` was still affected by
+  [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) and
+  the advisory listed no patched version at review time. This drives build
+  and test dependency findings, including the remaining Vitest entry after
+  upgrading to `4.1.12`. Recheck the compatible 2.x and 4.x dependency
+  paths when a supported fix is available.
+
+The clean install resolved all target versions. The companion build input
+list contained the MCP SDK's validator adapter and no direct `fast-uri`
+package files, so the `fast-uri` finding is reported as a lockfile fix.
+Type checking, template compilation, tests, build, and package checks passed.
+An isolated macOS Tabby 1.0.238 instance loaded the rebuilt package and
+displayed the Secure MCP Clients and Service settings with the service stopped.
+
+The remaining scan results stay open. This update does not dismiss alerts or
+determine whether a remaining advisory is reachable in a deployed plugin.
