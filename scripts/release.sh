@@ -10,6 +10,10 @@ Usage:
 
 The first publish requires a clean main equal to the official remote main,
 an authenticated npm account, and a package name still unregistered on npm.
+Before running --publish, sign in to the official npm registry and verify your account.
+  npm login --registry=https://registry.npmjs.org
+  npm whoami --registry=https://registry.npmjs.org
+
 Subsequent versions use the GitHub Actions Trusted Publisher workflow.
 See docs/publishing.md for the setup and security review.
 HELP
@@ -92,7 +96,10 @@ if [[ "$mode" == publish ]]; then
   printf 'Release source: %s\n' "$release_head"
   state="$(registry_status)"
   [[ "$state" == missing ]] || fail "$package_name is already registered. Use the Trusted Publisher workflow."
-  npm whoami --registry="$registry" >/dev/null || fail 'Sign in to the official npm registry before first publication.'
+  npm whoami --registry="$registry" >/dev/null || fail "Sign in to the official npm registry before first publication.
+  npm login --registry=$registry
+  npm whoami --registry=$registry
+After npm whoami prints your username, rerun bash scripts/release.sh --publish."
 fi
 
 git diff --check
