@@ -12,7 +12,6 @@ import { createTabbyConfigProxyHarness } from './tabby-config-proxy.harness'
 describe('Secure MCP settings metadata', () => {
   it('registers settings tab metadata', () => {
     expect(secureMcpSettingsTabMetadata.id).toBe('secure-mcp')
-    expect(secureMcpSettingsTabMetadata.title).toBe('Secure MCP')
     expect(secureMcpSettingsTabMetadata.icon).toMatch(/shield|lock/i)
   })
 })

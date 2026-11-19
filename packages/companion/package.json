@@ -1,6 +1,6 @@
 {
   "name": "@tabby-secure-mcp/companion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Internal embedded MCP library for tabby-secure-mcp",
   "license": "MIT",
   "type": "module",
@@ -18,7 +18,7 @@
     "pack:check": "npm pack --dry-run"
   },
   "devDependencies": {
-    "@tabby-secure-mcp/ipc-contract": "0.1.0",
+    "@tabby-secure-mcp/ipc-contract": "0.1.1",
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/server": "2.3.1",
     "zod": "4.6.7",

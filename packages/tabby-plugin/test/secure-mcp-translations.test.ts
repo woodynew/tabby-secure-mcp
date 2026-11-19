@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { SECURE_MCP_EN, SECURE_MCP_ZH_CN, translationsForLocale } from '../src/i18n/messages'
 import { SecureMcpTranslations } from '../src/i18n/secure-mcp-translations'
+import { secureMcpSettingsTabMetadata } from '../src/settings/secure-mcp-settings.metadata'
 import { secureMcpSettingsTemplate } from '../src/settings/secure-mcp-settings.template'
 import { SETTINGS_OPERATION_TIER_OPTIONS } from '../src/settings/secure-mcp-settings.view-model'
 import { createHostTranslator } from './tabby-translation.harness'
@@ -75,18 +76,24 @@ describe('Secure MCP host translation registration', () => {
       { getLocale: () => current, localeChanged$: changed } as never,
       translate,
     )
-    const title = pipe()
+    const tabTitle = pipe()
+    const pageTitle = pipe()
+    const commandSessionsTitle = pipe()
     const error = pipe()
     const countdown = pipe()
     const httpNotice = pipe()
     const permission = pipe()
-    expect(title.transform('secureMcp.commandSessions')).toBe('Command sessions')
+    expect(tabTitle.transform(secureMcpSettingsTabMetadata.title)).toBe('Secure MCP')
+    expect(pageTitle.transform('secureMcp.settingsTitle')).toBe('Secure MCP')
+    expect(commandSessionsTitle.transform('secureMcp.commandSessions')).toBe('Command sessions')
     expect(error.transform('secureMcp.errorLoadProfiles')).toBe('Failed to load SSH profiles.')
     expect(countdown.transform('secureMcp.timeRemaining', { seconds: 5 })).toBe('Time remaining: 5s')
     for (const lang of ['zh-CN', 'fr-FR', 'en-US', 'zh-CN']) {
       setLocale(lang)
       const zh = lang === 'zh-CN'
-      expect(title.transform('secureMcp.commandSessions')).toBe(zh ? '命令会话' : 'Command sessions')
+      expect(tabTitle.transform(secureMcpSettingsTabMetadata.title)).toBe(zh ? '安全 MCP' : 'Secure MCP')
+      expect(pageTitle.transform('secureMcp.settingsTitle')).toBe(zh ? '安全 MCP' : 'Secure MCP')
+      expect(commandSessionsTitle.transform('secureMcp.commandSessions')).toBe(zh ? '命令会话' : 'Command sessions')
       expect(error.transform('secureMcp.errorLoadProfiles'))
         .toBe(zh ? '加载 SSH 连接失败。' : 'Failed to load SSH profiles.')
       expect(countdown.transform('secureMcp.timeRemaining', { seconds: 5 }))
@@ -97,7 +104,9 @@ describe('Secure MCP host translation registration', () => {
         .toBe(zh ? '有效期至 2026-11-16 12:00' : 'Until 2026-11-16 12:00')
       expect(translate.instant('hostTitle')).toBe(lang)
     }
-    title.ngOnDestroy()
+    tabTitle.ngOnDestroy()
+    pageTitle.ngOnDestroy()
+    commandSessionsTitle.ngOnDestroy()
     error.ngOnDestroy()
     countdown.ngOnDestroy()
     httpNotice.ngOnDestroy()

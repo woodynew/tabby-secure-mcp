@@ -5,10 +5,10 @@ import { homedir as nodeHomedir, tmpdir as nodeTmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { assertPackManifest, assertPluginBundle, assertTabbyPluginDiscoveryManifest } from './pack-check-core.mjs'
+import { assertPackManifest, assertPluginBundle, assertTabbyPluginDiscoveryManifest, EXPECTED_VERSION } from './pack-check-core.mjs'
 import { packWorkspacePackage, runCommand } from './npm-pack-utils.mjs'
 
-export const EXPECTED_VERSION = '0.1.0'
+export { EXPECTED_VERSION }
 export const PLUGIN_PACKAGE_NAME = 'tabby-secure-mcp'
 export const COMPANION_PACKAGE_NAME = '@tabby-secure-mcp/companion'
 

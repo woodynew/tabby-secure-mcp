@@ -18,7 +18,7 @@ export interface McpDispatcher {
 
 export function createMcpServer(gateway: McpDispatcher): McpServer {
   const server = new McpServer(
-    { name: 'tabby-secure-mcp', version: '0.1.0' },
+    { name: 'tabby-secure-mcp', version: '0.1.1' },
     { capabilities: { tools: {} } },
   )
 

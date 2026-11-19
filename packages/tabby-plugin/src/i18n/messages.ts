@@ -244,9 +244,9 @@ export const SECURE_MCP_EN = {
 } as const
 
 export const SECURE_MCP_ZH_CN: Record<keyof typeof SECURE_MCP_EN, string> = {
-  settingsTitle: 'Secure MCP',
+  settingsTitle: '安全 MCP',
   settingsIntro: '让 AI 客户端按你的授权使用 SSH。',
-  settingsSections: 'Secure MCP 设置分区',
+  settingsSections: '安全 MCP 设置分区',
   sectionService: '服务',
   sectionClients: '客户端',
   sectionSsh: 'SSH 权限',
@@ -412,7 +412,7 @@ export const SECURE_MCP_ZH_CN: Record<keyof typeof SECURE_MCP_EN, string> = {
   target: '目标',
   operation: '操作',
   timeRemaining: '剩余时间：{seconds} 秒',
-  rememberOpen: '允许后会记住此客户端对此 SSH 连接的授权，直到在 Secure MCP 设置中撤销。命令权限单独管理。',
+  rememberOpen: '允许后会记住此客户端对此 SSH 连接的授权，直到在安全 MCP 设置中撤销。命令权限单独管理。',
   approvePairing: '批准 MCP 客户端连接',
   pairingRequested: '本地 MCP 客户端正在请求访问。其声明的名称不是经过验证的程序身份。',
   companion: 'Companion',
