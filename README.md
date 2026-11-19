@@ -6,6 +6,39 @@
 
 A Tabby plugin hosting a local Streamable HTTP MCP service. AI clients can list explicitly whitelisted SSH profiles, open and reuse visible SSH tabs, execute approved commands, and transfer files when separately enabled. The service runs inside Tabby; there is no standalone companion process or client-side Node command.
 
+## Quick start
+
+1. **Install in Tabby.** Open **Settings → Plugins → Available**, search for
+   `maintainer:woodynewv`, and install **secure-mcp**. The npm package name is
+   `tabby-secure-mcp`. Restart Tabby after installation.
+2. **Enable the local service.** In the main Tabby window, open **Settings → Secure MCP**
+   (**安全 MCP** in Simplified Chinese on v0.1.1 and later). Under **Service**, click
+   **Enable / save service**. It starts disabled and defaults to `http://127.0.0.1:50333/mcp`
+   when enabled.
+3. **Choose an SSH profile.** Under **SSH permissions**, select an existing profile
+   that you can connect to in Tabby. Start with a low-privilege test account and
+   select **Ask for approval** for its command mode.
+4. **Connect your AI client.** Under **Clients**, enter a credential name, click
+   **Add client**, then click **Copy MCP configuration**. Add the copied URL and
+   `Authorization` header to a client that supports MCP **Streamable HTTP** on the
+   same machine. Keep the copied bearer token private. [Client setup examples](docs/configure-mcp-clients.md)
+5. **Verify the connection.** Connect the client and approve its pairing prompt in
+   Tabby. Ask it to call `list_authorized_ssh_profiles` and confirm your selected
+   profile appears. Then ask it to open that SSH connection and approve the SSH
+   prompt in Tabby when it appears. [First tool calls](docs/configure-mcp-clients.md#first-calls)
+
+### Install from source
+
+From a source checkout with Node.js 20.19.0 or newer, run:
+
+```bash
+npm ci && npm run install:local
+```
+
+The installer uses your platform's Tabby plugins directory. To use a different
+directory, pass `-- --plugins-dir "/absolute/plugins/path"` to the install command.
+Restart Tabby and continue with step 2. [First release notes](docs/releases/v0.1.0.md)
+
 ## Security evidence
 
 - [Security policy and private vulnerability reporting](SECURITY.md)
@@ -18,27 +51,6 @@ shows the repository's latest automated assessment of its security practices.
 Existing dependency findings remain disclosed. No independent
 third-party security audit or security certification is claimed. Package provenance
 must be checked on an actually published version; preparing a workflow does not create it.
-
-## Quick start
-
-1. Install the plugin. In **Tabby → Settings → Plugins**, search for
-   `tabby-secure-mcp` once it is available there. See the
-   [v0.1.0 release notes](docs/releases/v0.1.0.md) for the first release.
-   To build and install from a source checkout instead, run:
-
-   ```bash
-   npm ci
-   npm run install:local
-   ```
-
-   The installer uses your platform's Tabby plugins directory. To override it, pass `-- --plugins-dir "/absolute/plugins/path"`. Use a directory under your control. Only one self-contained plugin package is installed. Node is needed for building/installing from source, not for AI clients to run the installed service.
-
-2. Restart Tabby. In the **main window → Settings → Secure MCP**, select only the SSH profiles you want to expose and choose their command approval modes. Start with a dedicated test account and **Request approval**.
-3. Enter a **credential name**, click **Add client**, and copy that client's MCP configuration. Use a separate credential for each connection client; names can be edited without changing grants.
-4. Enable the local service (default `127.0.0.1:50333/mcp`; port configurable). Configure an AI tool supporting Streamable HTTP and an Authorization header using the copied information. Configuration formats vary by client.
-5. Preauthorize the named client in settings or approve it when prompted. Pairing supports **this session**, **24 hours**, or **permanent**. In the same client card, preauthorize each whitelisted SSH connection with **Permanently allow**, or leave **Ask when used**. Command approval modes remain separate.
-
-Client configuration contains a private bearer token: do not commit or share it. Copying is an explicit action; the plugin does not edit AI-tool configuration files.
 
 ## Seven tools
 
