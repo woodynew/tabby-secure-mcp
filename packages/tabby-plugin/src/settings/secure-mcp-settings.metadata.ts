@@ -1,5 +1,5 @@
 export const secureMcpSettingsTabMetadata = {
   id: 'secure-mcp',
-  title: 'Secure MCP',
+  title: 'secureMcp.settingsTitle',
   icon: 'shield',
 } as const

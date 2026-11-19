@@ -63,17 +63,17 @@ describe('assertTabbyPluginDiscoveryManifest', () => {
 describe('assertPackManifest', () => {
   it('rejects workspace and file dependencies', () => {
     expect(() =>
-      assertPackManifest({ name: 'x', version: '0.1.0', dependencies: { foo: 'workspace:*' } }, 'plugin'),
+      assertPackManifest({ name: 'x', version: EXPECTED_VERSION, dependencies: { foo: 'workspace:*' } }, 'plugin'),
     ).toThrow(/workspace/i)
     expect(() =>
-      assertPackManifest({ name: 'x', version: '0.1.0', dependencies: { foo: 'file:../x' } }, 'plugin'),
+      assertPackManifest({ name: 'x', version: EXPECTED_VERSION, dependencies: { foo: 'file:../x' } }, 'plugin'),
     ).toThrow(/file:/i)
   })
 
   it('rejects plugin runtime dependencies on the internal companion', () => {
-    expect(() => assertPackManifest({ version: '0.1.0', dependencies: { '@tabby-secure-mcp/companion': '0.1.0' } }, 'plugin')).toThrow(/runtime|self.contained/i)
-    expect(() => assertPackManifest({ version: '0.1.0', optionalDependencies: { '@tabby-secure-mcp/companion': '0.1.0' } }, 'plugin')).toThrow(/runtime|self.contained/i)
-    expect(() => assertPackManifest({ version: '0.1.0', devDependencies: { '@tabby-secure-mcp/companion': '0.1.0' } }, 'plugin')).not.toThrow()
+    expect(() => assertPackManifest({ version: EXPECTED_VERSION, dependencies: { '@tabby-secure-mcp/companion': EXPECTED_VERSION } }, 'plugin')).toThrow(/runtime|self.contained/i)
+    expect(() => assertPackManifest({ version: EXPECTED_VERSION, optionalDependencies: { '@tabby-secure-mcp/companion': EXPECTED_VERSION } }, 'plugin')).toThrow(/runtime|self.contained/i)
+    expect(() => assertPackManifest({ version: EXPECTED_VERSION, devDependencies: { '@tabby-secure-mcp/companion': EXPECTED_VERSION } }, 'plugin')).not.toThrow()
   })
 })
 
@@ -82,7 +82,7 @@ describe('single self-contained plugin tarball', () => {
 
   async function inspectBundle(bundle = umd) {
     const packDir = await mkdtemp(path.join(tmpdir(), 'single-plugin-pack-'))
-    await writeMinimalTgz(path.join(packDir, 'tabby-secure-mcp-0.1.0.tgz'), {
+    await writeMinimalTgz(path.join(packDir, `tabby-secure-mcp-${EXPECTED_VERSION}.tgz`), {
       'package/package.json': JSON.stringify({ name: 'tabby-secure-mcp', version: EXPECTED_VERSION, author: 'test', keywords: [TABBY_PLUGIN_KEYWORD], main: 'dist/index.js' }),
       'package/dist/index.js': bundle,
       'package/LICENSE': 'MIT License',

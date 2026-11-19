@@ -8,7 +8,7 @@ import { buildSync } from 'esbuild'
 
 import { packWorkspacePackage } from './npm-pack-utils.mjs'
 
-export const EXPECTED_VERSION = '0.1.0'
+export const EXPECTED_VERSION = '0.1.1'
 export const PLUGIN_PACKAGE_NAME = 'tabby-secure-mcp'
 export const TABBY_PLUGIN_KEYWORD = 'tabby-plugin'
 

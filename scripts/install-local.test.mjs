@@ -345,7 +345,7 @@ describe('runInstall smoke', () => {
     await verifyInstalledLayout(pluginsDir, { platform: 'linux' })
     await assertNoTransientInstallerReferences(pluginsDir)
     await expect(stat(result.pluginPack.tarballPath)).resolves.toBeDefined()
-    expect(await readdir(packDir)).toEqual(['tabby-secure-mcp-0.1.0.tgz'])
+    expect(await readdir(packDir)).toEqual([`tabby-secure-mcp-${EXPECTED_VERSION}.tgz`])
     expect(result).not.toHaveProperty('companionPack')
     expect(result).not.toHaveProperty('companionCommand')
     expect(result.connectionInstructions).toMatch(/HTTP|127\.0\.0\.1/)
@@ -371,7 +371,7 @@ describe('runInstall smoke', () => {
 
     const legacySource = path.join(runtimeParent, 'legacy companion source')
     await mkdir(legacySource)
-    await writeFile(path.join(legacySource, 'package.json'), JSON.stringify({ name: COMPANION_PACKAGE_NAME, version: EXPECTED_VERSION }))
+    await writeFile(path.join(legacySource, 'package.json'), JSON.stringify({ name: COMPANION_PACKAGE_NAME, version: '0.1.0' }))
     await runCommand('npm', ['pack', '--pack-destination', runtimeParent], { cwd: legacySource })
     const legacyTarball = path.join(runtimeParent, 'tabby-secure-mcp-companion-0.1.0.tgz')
     await runCommand('npm', ['install', '--prefix', pluginsDir, '--ignore-scripts', '--legacy-peer-deps', '--save', '--save-exact', legacyTarball])
